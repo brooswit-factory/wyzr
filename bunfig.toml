@@ -1,0 +1,5 @@
+[test]
+# Coverage is only collected/enforced when `--coverage` is passed (the
+# `test:coverage` script), not on a plain `bun test`.
+coverageThreshold = 0.95
+coverageReporter = ["text", "lcov"]
