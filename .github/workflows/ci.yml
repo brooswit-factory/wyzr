@@ -1,0 +1,58 @@
+name: CI
+
+# No `branches:` filter on pull_request: this repo's own default PR base is
+# WYZR-4 (a story-integration branch), not main, and a branches filter that
+# only listed main would silently not run on this repo's own PRs.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # Fails the job if coverage drops below the threshold in bunfig.toml.
+      # No credentials of any kind are needed — the whole suite is offline.
+      - run: bun run test:coverage
+
+  no-direct-console:
+    name: no-direct-console
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # Fails when anything under src/ writes to a std stream outside
+      # src/output.ts — see README.md for the equivalent grep.
+      - run: bun run check:no-console
