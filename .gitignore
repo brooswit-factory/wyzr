@@ -3,5 +3,11 @@ coverage/
 .env
 .env.*
 *.local
-*credentials*
+# The actual risk is a real secrets file landing in the repo — narrowed
+# from `*credentials*`, which also matched (and would have silently
+# dropped) this story's own legitimate src/credentials.ts and
+# test/unit/credentials.test.ts. Real credentials never belong in this
+# repo regardless of filename; this line is a backstop for the one exact
+# name loadCredentials() reads, not a substitute for that rule.
+credentials.json
 *.log
