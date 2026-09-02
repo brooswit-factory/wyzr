@@ -122,6 +122,16 @@ describe("loadCredentials — happy path", () => {
     expect(creds.totpSecret).toBeUndefined();
   });
 
+  // A naive `totpSecret !== undefined` check downstream would read "" as
+  // configured and misfire the MFA/TOTP path — see WYZR-11's ticket.
+  test("treats an empty-string totpSecret the same as absent", async () => {
+    const base = await makeBase();
+    const { env } = await fixture(base, { ...FAKE, totpSecret: "" });
+
+    const creds = await loadCredentials(env);
+    expect(creds.totpSecret).toBeUndefined();
+  });
+
   test("registers password, keySecret and totpSecret for redaction before returning", async () => {
     const base = await makeBase();
     const { env } = await fixture(base, FAKE);

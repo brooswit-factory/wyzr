@@ -114,6 +114,13 @@ function requireStringField(obj: Record<string, unknown>, field: string, path: s
   return value;
 }
 
+// An empty string is treated the same as absent (not just undefined/null):
+// downstream MFA branching needs "is a TOTP secret configured" to be a
+// clean boolean check, and a naive `!== undefined` reading of `""` as
+// "configured" would produce a confusing TOTP failure instead of this
+// module's own clear "no TOTP secret configured" contract. Fixed here at
+// the source, rather than requiring every caller to re-apply a falsy check,
+// so the exported type's optionality actually means what it says.
 function optionalStringField(obj: Record<string, unknown>, field: string, path: string): string | undefined {
   if (!(field in obj) || obj[field] === undefined || obj[field] === null) {
     return undefined;
@@ -125,7 +132,7 @@ function optionalStringField(obj: Record<string, unknown>, field: string, path: 
       "credentials_field_invalid",
     );
   }
-  return value;
+  return value.length === 0 ? undefined : value;
 }
 
 /**

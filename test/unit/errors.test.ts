@@ -37,6 +37,7 @@ describe("ExitCode", () => {
       ExitCode.NotFound,
       ExitCode.Network,
       ExitCode.ApiError,
+      ExitCode.MfaRequired,
     ];
     expect(new Set(codes).size).toBe(codes.length);
   });
