@@ -8,6 +8,10 @@
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 
+// Scoped to src/ deliberately, NOT a repo-wide grep: a sibling story lands
+// Wyze API research docs under docs/ with fenced console.log code samples
+// that legitimately belong there. A repo-wide grep would flag that
+// document's own content as a violation of this repo's CI.
 const SRC_DIR = new URL("../src", import.meta.url).pathname;
 const EXEMPT = new Set(["output.ts"]);
 
