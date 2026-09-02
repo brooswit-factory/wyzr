@@ -153,6 +153,29 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
     expect(err.reason).toBe("mfa_totp_secret_invalid");
   });
 
+  // Blocking review finding on WYZR-11: base32Decode() used to interpolate
+  // the offending character into its thrown message, which
+  // wyzeMfaTotpSecretInvalidError() then surfaced verbatim — a fragment of
+  // a secret leaking straight past src/redact.ts, which only matches
+  // whole registered strings. Reproduces the reviewer's exact scenario: a
+  // user who pastes their PASSWORD into totpSecret by mistake.
+  test("never echoes any part of an invalid totpSecret, even when it is actually the account password", async () => {
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaTotpChallengeEnvelope() });
+    const creds: Credentials = { ...FAKE_CREDS, totpSecret: FAKE_CREDS.password };
+    const session = new WyzeAuthSession({ transport, credentials: creds });
+
+    const err = await expectCliError(session.login());
+    expect(err.reason).toBe("mfa_totp_secret_invalid");
+    expect(err.message).not.toContain(FAKE_CREDS.password);
+    // Before the fix, this message contained `Invalid base32 character:
+    // "-"` — the exact character base32Decode() rejected the password on,
+    // quoted, which is what let it leak. It's gone now; only the harmless
+    // hyphen inside "6-digit" (unrelated to the leak) remains in the
+    // message, so this checks for the specific quoted-character shape,
+    // not bare "-".
+    expect(err.message).not.toMatch(/character: "/);
+  });
+
   test("a wrong TOTP answer surfaces the same errorCode-1000 trap error, not a generic failure", async () => {
     const transport = new FakeWyzeTransport({
       loginHandler: () => fakeMfaTotpChallengeEnvelope(),
@@ -302,6 +325,24 @@ describe("WyzeAuthSession — token redaction (run red-first, see PR body)", () 
 
     expect(redact(`printed access token: leak-at-canary-000`)).toBe(`printed access token: ${REDACTED}`);
     expect(redact(`printed refresh token: leak-rt-canary-000`)).toBe(`printed refresh token: ${REDACTED}`);
+  });
+
+  // Non-blocking review suggestion on WYZR-11: the triple-MD5 password
+  // hash is password-EQUIVALENT (exactly what authenticates on the wire),
+  // so it gets the same defence-in-depth registration as the tokens.
+  test("the triple-MD5 password hash sent on the wire is also redacted", async () => {
+    let seenHash = "";
+    const transport = new FakeWyzeTransport({
+      loginHandler: (req) => {
+        seenHash = req.passwordHash;
+        return fakeSuccessEnvelope();
+      },
+    });
+    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
+
+    await session.login();
+
+    expect(redact(`hash was ${seenHash}`)).toBe(`hash was ${REDACTED}`);
   });
 
   test("tokens obtained via the MFA path are also redacted", async () => {

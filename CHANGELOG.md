@@ -40,7 +40,19 @@ All notable changes to this project are documented in this file.
   they are received — in `src/transport-http.ts` as soon as a real HTTP
   response is parsed, and in `src/auth-session.ts` as soon as tokens are
   extracted from any successful envelope (login, MFA, or refresh) — before
-  any caller could print one.
+  any caller could print one. The triple-MD5 password hash is registered
+  the same way, the moment it is computed.
+
+### Fixed
+
+- `src/totp.ts`'s `base32Decode()` no longer echoes the offending
+  character into its thrown message when a configured `totpSecret` is not
+  valid base32 (e.g. a password pasted into the wrong field by mistake) —
+  it now reports only the character's position. The character itself was
+  reaching a user-facing error (`wyzeMfaTotpSecretInvalidError`) that
+  `src/redact.ts` cannot catch, since the registry matches whole
+  registered strings, not one unregistered character of one. Found in
+  review; fixed with a dedicated regression test, run red-first.
 
 ### Changed
 

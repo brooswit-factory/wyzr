@@ -285,6 +285,16 @@ establish what `code` value accompanies a challenge.
   correctly falls through to the "missing" case rather than misfiring.
 - **TOTP, with no `totpSecret` configured**: a clear `mfa_required`
   (`ExitCode.MfaRequired`) error naming what happened and what to do.
+- **TOTP, with an invalid (non-base32) `totpSecret` configured** (e.g. a
+  password pasted into the wrong field by mistake): a clear
+  `mfa_required` error naming the problem — with the offending character
+  itself never echoed. `src/totp.ts`'s `base32Decode()` reports only the
+  0-based position of an invalid character, never the character, because
+  `src/redact.ts` matches whole registered strings, not one unregistered
+  character of one — echoing it would leak a fragment of a secret straight
+  past redaction. Covered by a dedicated test in `test/unit/totp.test.ts`
+  and an end-to-end one in `test/unit/auth-session.test.ts`, both run
+  red-first.
 - **SMS**: wyzr has no way to receive or answer an SMS code. A clear
   `mfa_required` error, never a silent failure or a pretended-away branch.
 - **An unrecognized challenge type**: same treatment — a clear error, not
@@ -366,9 +376,13 @@ account identifiers" beyond what was asked for) and
 envelope, regardless of whether they arrived via `login`, the MFA path, or
 `refresh`) register `access_token`/`refresh_token` with
 `src/redact.ts`'s registry before returning to any caller. This was also
-verified red-first — see the PR body. No raw API response is ever printed
-wholesale on any path; this story adds no `printHuman`/`printJson` call at
-all (no CLI command lands until the next story), so there is no print path
+verified red-first — see the PR body. The triple-MD5 password hash
+(`src/auth-session.ts`'s `hashedPassword()`) is registered the same way,
+the moment it is computed — it is password-**equivalent** (exactly what
+authenticates on the wire), not merely password-derived. No raw API
+response is ever printed wholesale on any path; this story adds no
+`printHuman`/`printJson` call at all (no CLI command lands until the next
+story), so there is no print path
 to audit yet beyond what `src/output.ts` already covers.
 
 ### Two items carried forward from WYZR-10's review

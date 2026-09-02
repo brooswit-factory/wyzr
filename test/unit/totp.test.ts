@@ -88,6 +88,37 @@ describe("base32Decode — RFC 4648 §10 test vectors", () => {
   test("rejects an invalid base32 character", () => {
     expect(() => base32Decode("not-base32!")).toThrow();
   });
+
+  // Blocking review finding on WYZR-11: this input can be a user-facing
+  // TOTP secret typed/pasted by mistake (e.g. a password pasted into the
+  // wrong field) — the thrown message must never echo the offending
+  // character itself, only its position, or a fragment of a secret leaks
+  // straight past src/redact.ts (which matches whole registered strings,
+  // not one unregistered character of one).
+  test("does not echo the offending character in the thrown message", () => {
+    let message = "";
+    try {
+      base32Decode("!");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).not.toContain("!");
+    expect(message.length).toBeGreaterThan(0);
+  });
+
+  test("does not echo any character of a longer invalid secret", () => {
+    // A distinctive character that would only appear here via the leak
+    // this test guards against.
+    const secret = "totally-not-base32-#zq9";
+    let message = "";
+    try {
+      base32Decode(secret);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).not.toContain("#");
+    expect(message).not.toContain("zq9");
+  });
 });
 
 describe("totpFromBase32Secret — full pipeline over a user-facing secret", () => {

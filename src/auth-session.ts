@@ -76,12 +76,23 @@ export class WyzeAuthSession {
   async login(): Promise<void> {
     const envelope = await this.deps.transport.login({
       email: this.deps.credentials.email,
-      passwordHash: wyzeTripleMd5(this.deps.credentials.password),
+      passwordHash: this.hashedPassword(),
       nonce: this.currentNonce(),
       keyId: this.deps.credentials.keyId,
       keySecret: this.deps.credentials.keySecret,
     });
     await this.handleLoginEnvelope(envelope);
+  }
+
+  /** The triple-MD5 password hash, registered for redaction the moment it
+   * is computed. It is a password-EQUIVALENT (it is exactly what goes on
+   * the wire to authenticate), not merely password-derived, so it gets the
+   * same treatment as the tokens even though nothing currently prints it —
+   * this guards the path someone adds later, not a live leak today. */
+  private hashedPassword(): string {
+    const hash = wyzeTripleMd5(this.deps.credentials.password);
+    registerSecret(hash);
+    return hash;
   }
 
   /**
@@ -129,7 +140,7 @@ export class WyzeAuthSession {
 
     const envelope = await this.deps.transport.submitMfa({
       email: this.deps.credentials.email,
-      passwordHash: wyzeTripleMd5(this.deps.credentials.password),
+      passwordHash: this.hashedPassword(),
       nonce: this.currentNonce(),
       keyId: this.deps.credentials.keyId,
       keySecret: this.deps.credentials.keySecret,

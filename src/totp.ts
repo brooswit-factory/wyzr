@@ -67,10 +67,19 @@ const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export function base32Decode(input: string): Buffer {
   const clean = input.toUpperCase().replace(/[=\s]/g, "");
   let bits = "";
-  for (const char of clean) {
+  for (let i = 0; i < clean.length; i++) {
+    const char = clean[i]!;
     const index = BASE32_ALPHABET.indexOf(char);
     if (index === -1) {
-      throw new Error(`Invalid base32 character: "${char}"`);
+      // Deliberately does NOT include `char` itself: this function is used
+      // to decode a user-facing TOTP secret (see wyze-errors.ts's
+      // wyzeMfaTotpSecretInvalidError), which can be user input typed or
+      // pasted by mistake (e.g. a password pasted into the wrong field).
+      // The redaction registry matches whole registered strings, not a
+      // single unregistered character of one — so echoing the character
+      // itself here would leak a fragment of a secret straight past
+      // redaction. Position is metadata, not content.
+      throw new Error(`Invalid base32 character at position ${i} of the input string`);
     }
     bits += index.toString(2).padStart(5, "0");
   }
