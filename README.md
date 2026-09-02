@@ -7,10 +7,11 @@ wyzr exists so the plug that powers an agent-workforce host can be power
 cycled from a client that depends on nothing running on that host itself —
 see the story ticket for the full motivation.
 
-**Status: foundation scaffold only.** This repo currently ships the project
-skeleton, the redaction-proof output core, the typed exit-code layer, and
-gating CI — no Wyze API, auth, transport, or device commands exist yet.
-Those land in later stories. See "Live-device coverage" below.
+**Status: foundation + credentials loading.** This repo ships the project
+skeleton, the redaction-proof output core, the typed exit-code layer,
+gating CI, and file-backed credentials loading (`src/credentials.ts`) —
+still no Wyze API, auth, transport, or device commands. Those land in
+later stories. See "Live-device coverage" below.
 
 ## Install / usage
 
@@ -105,13 +106,87 @@ grep -rnE '(console\.(log|error|warn|info|debug|trace)\s*\(|process\.(stdout|std
 
 No output = clean. Any line printed is a violation.
 
-## Credentials (not yet implemented)
+## Credentials
 
-wyzr will read a Wyze account email plus an API key id and secret from a
-file — the exact shape is a later story's decision, not this one's. This
-repo never contains real credentials, and nothing shaped like one: tests
-use obviously-fake tokens, and CI has none configured. The entire suite
-runs and passes with **no credentials of any kind** present.
+`src/credentials.ts`'s `loadCredentials()` is the **only** way a Wyze
+secret enters this process. It reads a single JSON file, validates it,
+registers every secret value with the redaction registry (`src/redact.ts`)
+before returning, and refuses to load a file (or containing directory)
+that is readable or writable by anyone but its owner. There is no
+credential flag on the CLI, of any kind, and no environment-variable
+fallback for a secret — file-backed only.
+
+**Nothing here has ever been exercised against a real Wyze account or
+device.** This module has no transport, no HTTP, no MD5 hashing, and no
+MFA handling — it only loads and types the values a later story's auth
+call will use. Every unit test constructs its own temp directory and
+passes an explicit `CredentialsEnv`; none of them touch the real `$HOME`
+or `$XDG_CONFIG_HOME`, and the whole suite runs with zero credentials and
+zero network.
+
+### File location
+
+`$XDG_CONFIG_HOME/wyzr/credentials.json` when `XDG_CONFIG_HOME` is set and
+non-empty, else `$HOME/.config/wyzr/credentials.json`.
+
+### File shape
+
+A single JSON object:
+
+```json
+{
+  "email": "you@example.com",
+  "password": "your-wyze-account-password",
+  "keyId": "your-developer-api-key-id",
+  "keySecret": "your-developer-api-key-secret",
+  "totpSecret": "your-totp-secret"
+}
+```
+
+| Field        | Required | Meaning                                                                 |
+| ------------ | -------- | ------------------------------------------------------------------------ |
+| `email`      | yes      | Wyze account email.                                                      |
+| `password`   | yes      | Wyze account password (native Wyze password, not an SSO provider's — see `docs/wyze-api-findings-2026-09-02.md` §Q3 for why an SSO-only account fails auth). A later story sends it as `md5(md5(md5(password)))`, never raw — this module only carries it. |
+| `keyId`      | yes      | Developer API key ID, from `developer-api-console.wyze.com`.             |
+| `keySecret`  | yes      | Developer API key secret, from the same console.                        |
+| `totpSecret` | no       | TOTP secret, only if the account has MFA enabled. Absent (or `null`) when the account has none. |
+
+Any field not in this table is rejected — this is deliberate: it is the
+one place that would catch someone accidentally adding the SDK's separate,
+non-user-specific app-identity key (see the ticket / the findings doc,
+§Q3) to this file, which is a different task's concern and must not live
+here.
+
+Unknown-field and type/shape errors, a missing file, and malformed JSON
+all exit on the dedicated `credentials_invalid` code (see the exit-code
+table above) with a message naming the field or problem — **never**
+anything about a secret's value (not a prefix, not a length, not a hash).
+
+### File and directory mode
+
+Both `credentials.json` and its containing directory must be readable and
+writable by their owner only — `mode & 0o077` must be `0` for each
+(no group or other bits). A looser mode on either is refused outright,
+never warned-and-continued, with the exact fix in the error:
+
+```sh
+chmod 700 ~/.config/wyzr      # or $XDG_CONFIG_HOME/wyzr
+chmod 600 ~/.config/wyzr/credentials.json
+```
+
+The directory is checked as well as the file: a directory writable by
+another user on the box lets them replace the credentials file entirely
+(or symlink it elsewhere), which a file-mode check alone cannot catch.
+
+### Redaction
+
+`password`, `keySecret`, and `totpSecret` are registered with
+`src/redact.ts`'s secret registry before `loadCredentials()` returns —
+every later `printHuman`/`printJson`/`printError`/`printJsonError` call
+scrubs them automatically. `email` and `keyId` are **not** registered:
+they are identifiers rather than secrets, and registering a short or
+common string with a substring-matching redactor risks scrubbing
+unrelated, legitimate output that happens to contain the same substring.
 
 ## Live-device coverage
 

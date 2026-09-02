@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `src/credentials.ts`: file-backed credentials loading from
+  `$XDG_CONFIG_HOME/wyzr/credentials.json` (or `$HOME/.config/wyzr/` when
+  unset) — the only way a Wyze secret enters this process. Validates the
+  `email`/`password`/`keyId`/`keySecret` (required) and `totpSecret`
+  (optional) field set, refuses a group- or world-readable file or
+  directory outright, rejects unknown fields, and registers every secret
+  with `src/redact.ts` before returning. No credential flag on the CLI, no
+  environment-variable secret fallback. See README's "Credentials" section.
+
+### Changed
+
+- `.gitignore`: narrowed `*credentials*` to `credentials.json` — the
+  broader pattern also matched (and would have dropped) this story's own
+  `src/credentials.ts` and `test/unit/credentials.test.ts`.
+
 ## [0.1.0] - 2026-09-02
 
 ### Added
