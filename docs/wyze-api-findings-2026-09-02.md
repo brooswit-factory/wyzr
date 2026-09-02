@@ -105,13 +105,26 @@ key ID/API key from the same developer console) — see Q3 for the correction
 the source code reveals underneath that README description.
 
 Open issues worth naming: **#199**, "Developer API login returns errorCode
-1000 with valid credentials" (opened 2026-04-27, still open, zero replies as
-of 2026-09-02) — a single, uncorroborated report that some login attempts
-fail; not acknowledged by a maintainer, and the project kept shipping
-releases through 2026-08-20 without addressing it, so I do not read this as
-a systemic auth break — but it is a live, unresolved data point. (c)
-**#182**, "occasional service unavailable 503 errors" (opened 2026-06-27,
-still open). (c)
+1000 with valid credentials" (opened 2026-04-27, still open as of 2026-09-02)
+— **correction from an earlier draft of this document, which wrongly said
+"zero replies" and "not acknowledged by a maintainer."** It has one reply
+(2026-04-28), from a **COLLABORATOR** on the repo — maintainer-level. That
+reply identifies a specific, actionable cause: an account created via
+Google or Apple SSO has no Wyze-native password, so there is nothing for
+the SDK's triple-MD5 chain to hash, and the login call returns errorCode
+1000 — the same code it returns for a genuinely wrong password. The fix is
+to set a Wyze-specific password in the Wyze app (Account → Security) and
+use *that* as the input to the hash, not the SSO provider's password. This
+is a **provisioning prerequisite** for whoever creates the account this
+project will use — see §4 and §5. The same reply also states that
+`key_id`/`api_key` have been **mandatory since July 2023**, independently
+corroborating H2. (b — a maintainer-level reply on an actively maintained
+repo, read 2026-09-02)
+**#182**, "occasional service unavailable 503 errors" — **correction: opened
+`2024-06-27`, not `2026-06-27`** as an earlier draft of this document said
+(a two-year date error). A two-year-old, still-unresolved report of
+occasional 503s is a weaker signal than a two-month-old one; treated
+accordingly here. (c)
 
 The wider ecosystem is alive too, not just this one repository:
 `SecKatie/wyzeapy` pushed `2026-08-31` (b); `SecKatie/ha-wyzeapi`, a Home
@@ -148,6 +161,16 @@ Two distinct credential-like values are involved, not one:
 
 MFA: the login call can return a TOTP or SMS multi-factor challenge that
 must be answered before tokens are issued. (b)
+
+**Provisioning prerequisite, corrected in from the Q2 review above: the
+account must have a Wyze-native password.** A Google/Apple-SSO-only Wyze
+account has no password for the triple-MD5 chain to hash, and the login
+call fails with the same errorCode 1000 as a wrong password — indistinguishable
+from a credentials typo without knowing this. Confirm in the Wyze app under
+Account → Security before provisioning: if there is no "Change Password"
+option, the account is SSO-only and needs a Wyze-specific password set
+first. (b, `shauntarves/wyze-sdk` issue #199, comment from a repo
+COLLABORATOR, read 2026-09-02)
 
 Tokens returned: `access_token` and `refresh_token`, both long opaque
 strings (the README documents their prefix format; I am not reproducing an
@@ -299,8 +322,16 @@ in the (b)-tier findings above)
    "checked and found none," genuinely never came up.
 5. **Rate-limit thresholds** (requests/minute etc.) — no source publishes a
    number, only qualitative warnings.
-6. **Whether issue #199 is a real, current, systemic login failure** or a
-   one-off — zero replies, no maintainer acknowledgment as of 2026-09-02.
+6. ~~**Whether issue #199 is a real, current, systemic login failure** or a
+   one-off — zero replies, no maintainer acknowledgment as of 2026-09-02.~~
+   **Substantially answered on review** (this document originally got the
+   reply count on #199 wrong): a maintainer-level reply names a specific,
+   non-systemic cause (SSO-only accounts have no native password to hash —
+   see Q3) and a specific fix. What remains genuinely open: whether *any*
+   separate, systemic login failure exists beyond that one explained case —
+   nothing in the thread suggests one, but the absence of further reports
+   is not strong evidence either way this soon after the explanation was
+   posted.
 7. **Whether `jfarmer08/wyze-api` or `noelportugal/wyze-node` ship
    TypeScript type declarations** — blocked by npm fetch failures during
    this research; a direct `npm view <pkg> types` (or equivalent) would
@@ -319,6 +350,14 @@ in the (b)-tier findings above)
 
 ## 4. Recommendation for the transport story
 
+**Provisioning prerequisite (see Q3): before the account email/password/API
+key are issued to this project, confirm the account has a Wyze-native
+password** (Wyze app → Account → Security → "Change Password" present), not
+only Google/Apple SSO — otherwise the very first login attempt will fail
+with errorCode 1000 in a way that is indistinguishable from a wrong
+password or a broken transport, and will burn debugging time on the wrong
+layer.
+
 Build the TypeScript transport directly against `api.wyzecam.com` /
 `auth-prod.api.wyze.com` per the endpoint table in Q4, using the Python
 `wyze-sdk` source as the behavioral spec rather than wrapping either
@@ -335,8 +374,10 @@ since no local fallback exists for plugs (Q5).
 
 ## 5. What cannot be known without credentials
 
-- Whether login with a real account and a real API key succeeds today at
-  all (issue #199 raises doubt but is uncorroborated).
+- Whether login with a real, Wyze-native-password account and a real API
+  key succeeds today (the SSO-account failure mode in §2/Q3 is now
+  explained and avoidable by construction, but it is not the same as a
+  confirmed successful login).
 - Real response payload shapes.
 - Real MFA behavior for the specific account that will be provisioned.
 - Real token-refresh behavior/timing in practice, versus the documented
