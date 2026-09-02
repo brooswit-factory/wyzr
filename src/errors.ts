@@ -15,6 +15,7 @@ export const ExitCode = {
   NotFound: 4,
   Network: 5,
   ApiError: 6,
+  MfaRequired: 7,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -31,6 +32,7 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.NotFound]: "not_found",
   [ExitCode.Network]: "network",
   [ExitCode.ApiError]: "api_error",
+  [ExitCode.MfaRequired]: "mfa_required",
 };
 
 export class CliError extends Error {
