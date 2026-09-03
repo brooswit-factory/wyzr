@@ -18,6 +18,8 @@ export const WYZE_API_HOST = "api.wyzecam.com";
 export const WYZE_LOGIN_PATH = "/api/user/login";
 export const WYZE_REFRESH_TOKEN_PATH = "/app/user/refresh_token";
 export const WYZE_GET_OBJECT_LIST_PATH = "/app/v2/home_page/get_object_list";
+export const WYZE_GET_PROPERTY_LIST_PATH = "/app/v2/device/get_property_list";
+export const WYZE_SET_PROPERTY_PATH = "/app/v2/device/set_property";
 
 export interface LoginRequest {
   email: string;
@@ -50,6 +52,29 @@ export interface GetObjectListRequest {
   accessToken: string;
 }
 
+/** WYZR-13's addition. `targetPids` is the finding's §Q4 "you ask for
+ * specific property IDs; there is no generic 'status' field" — `mac`/
+ * `model` pair with it, per the same table. */
+export interface GetPropertyListRequest {
+  accessToken: string;
+  mac: string;
+  model: string;
+  targetPids: string[];
+}
+
+/** WYZR-13's addition. `value` is deliberately typed `0 | 1`, never
+ * `boolean` — decision (A): `P3` is wire-encoded as an integer, and this
+ * type is one of the two places (the other is decodeP3() in src/plug.ts)
+ * that makes sending a native boolean a compile error, not just a runtime
+ * mistake to catch in review. */
+export interface SetPropertyRequest {
+  accessToken: string;
+  mac: string;
+  model: string;
+  pid: string;
+  value: 0 | 1;
+}
+
 /**
  * Everything that talks to Wyze. Every method resolves to the RAW envelope
  * — success/error/MFA-challenge interpretation is deliberately NOT this
@@ -62,4 +87,6 @@ export interface WyzeTransport {
   submitMfa(req: SubmitMfaRequest): Promise<WyzeEnvelope>;
   refreshToken(req: RefreshTokenRequest): Promise<WyzeEnvelope>;
   getObjectList(req: GetObjectListRequest): Promise<WyzeEnvelope>;
+  getPropertyList(req: GetPropertyListRequest): Promise<WyzeEnvelope>;
+  setProperty(req: SetPropertyRequest): Promise<WyzeEnvelope>;
 }

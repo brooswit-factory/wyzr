@@ -18,8 +18,10 @@
 
 import type {
   GetObjectListRequest,
+  GetPropertyListRequest,
   LoginRequest,
   RefreshTokenRequest,
+  SetPropertyRequest,
   SubmitMfaRequest,
   WyzeTransport,
 } from "./transport.ts";
@@ -32,6 +34,8 @@ export interface FakeWyzeTransportOptions {
   submitMfaHandler?: Handler<SubmitMfaRequest>;
   refreshTokenHandler?: Handler<RefreshTokenRequest>;
   getObjectListHandler?: Handler<GetObjectListRequest>;
+  getPropertyListHandler?: Handler<GetPropertyListRequest>;
+  setPropertyHandler?: Handler<SetPropertyRequest>;
 }
 
 /** SYNTHETIC. A fake but plausibly-shaped access/refresh token pair —
@@ -79,27 +83,83 @@ export function fakeMfaSmsChallengeEnvelope(verificationId = "fake-verification-
   };
 }
 
+/** One device entry's overridable fields for fakeGetObjectListEnvelope()
+ * below. `connState` omitted entirely (the default) reproduces WYZR-6's
+ * original fixture gap on purpose — src/devices.ts's classifyState() then
+ * reads `"unknown"`, exactly as it would for a real response missing the
+ * field this project only guesses at. Pass `1`/`0` to get a device that
+ * projects as online/offline instead. */
+export interface FakeDeviceListEntry {
+  mac?: string;
+  model?: string;
+  nickname?: string;
+  connState?: 0 | 1 | "0" | "1";
+}
+
+/** Convenience presets — WYZR-13's fixture-enrichment requirement: "a fake
+ * that can express a genuinely ONLINE plug, an OFFLINE one, and an UNKNOWN
+ * one." Spread one of these into fakeGetObjectListEnvelope()'s device
+ * overrides, e.g. `fakeGetObjectListEnvelope([{ ...FAKE_PLUG_ONLINE, mac:
+ * "..." }])`. */
+export const FAKE_PLUG_ONLINE: FakeDeviceListEntry = { connState: 1 };
+export const FAKE_PLUG_OFFLINE: FakeDeviceListEntry = { connState: 0 };
+export const FAKE_PLUG_STATE_UNKNOWN: FakeDeviceListEntry = {};
+
 /** SYNTHETIC. A minimal, clearly-placeholder device list — the exact
  * field set is docs/wyze-api-findings-2026-09-02.md's explicit unknown #1
  * (no captured real `get_object_list` payload exists in any (a)/(b)-tier
- * source). This exists so the interface has something to call and the
- * next task (`wyzr devices list`, out of THIS task's scope) has a fake to
- * develop against — it is a placeholder, not a verified contract. */
-export function fakeGetObjectListEnvelope(): WyzeEnvelope {
+ * source). Defaults to one device (matching this fixture's original,
+ * single-device shape from WYZR-6/WYZR-11) with no `conn_state` at all;
+ * pass an array of `FakeDeviceListEntry` to control however many devices,
+ * and each one's mac/model/nickname/online-offline-unknown state, a test
+ * needs — this is WYZR-13's fix for the gap named on the ticket: WYZR-6's
+ * original fixture could only ever express "unknown," which meant nothing
+ * in this repo could exercise the online/offline distinction this story's
+ * `plug status`/`plug on`/`plug off` depend on. */
+export function fakeGetObjectListEnvelope(devices: FakeDeviceListEntry[] = [{}]): WyzeEnvelope {
   return {
     code: "1",
     msg: "",
     data: {
-      device_list: [
-        {
-          mac: "FAKE0000MAC0",
-          product_model: "WLPP1",
-          nickname: "fake synthetic plug — not a real device",
+      device_list: devices.map((entry, index) => {
+        const device: Record<string, unknown> = {
+          mac: entry.mac ?? `FAKE0000MAC${index}`,
+          product_model: entry.model ?? "WLPP1",
+          nickname: entry.nickname ?? "fake synthetic plug — not a real device",
           device_params: {},
-        },
-      ],
+        };
+        if (entry.connState !== undefined) {
+          device["conn_state"] = entry.connState;
+        }
+        return device;
+      }),
     },
   };
+}
+
+/** SYNTHETIC. A `get_property_list` response shaped as this project infers
+ * it (a `property_list` array of `{pid, value}` entries inside `data` — see
+ * src/plug.ts's top comment for why). Defaults to a plug that is ON and
+ * REACHABLE (`P3: 1, P5: 1`); pass `props` to simulate off, unreachable,
+ * a missing pid, or a wire-type WYZR-13's own tests need to reject (e.g.
+ * `{ P3: true }` for the boolean-rejection red-first test). */
+export function fakePropertyListEnvelope(props: Record<string, unknown> = { P3: 1, P5: 1 }): WyzeEnvelope {
+  return {
+    code: "1",
+    msg: "",
+    data: {
+      property_list: Object.entries(props).map(([pid, value]) => ({ pid, value })),
+    },
+  };
+}
+
+/** SYNTHETIC. A `set_property` success response. The finding documents no
+ * particular `data` shape for this call; `wyzr` never reads anything out of
+ * a `set_property` response body itself — decision (D) always follows it
+ * with a separate `get_property_list` read-back instead of trusting this
+ * envelope's `data`. */
+export function fakeSetPropertyEnvelope(): WyzeEnvelope {
+  return { code: "1", msg: "", data: {} };
 }
 
 export class FakeWyzeTransport implements WyzeTransport {
@@ -119,5 +179,15 @@ export class FakeWyzeTransport implements WyzeTransport {
 
   async getObjectList(req: GetObjectListRequest): Promise<WyzeEnvelope> {
     return this.opts.getObjectListHandler ? await this.opts.getObjectListHandler(req) : fakeGetObjectListEnvelope();
+  }
+
+  async getPropertyList(req: GetPropertyListRequest): Promise<WyzeEnvelope> {
+    return this.opts.getPropertyListHandler
+      ? await this.opts.getPropertyListHandler(req)
+      : fakePropertyListEnvelope();
+  }
+
+  async setProperty(req: SetPropertyRequest): Promise<WyzeEnvelope> {
+    return this.opts.setPropertyHandler ? await this.opts.setPropertyHandler(req) : fakeSetPropertyEnvelope();
   }
 }

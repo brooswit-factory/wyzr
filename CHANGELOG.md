@@ -6,6 +6,42 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- `wyzr plug status <device>`, `wyzr plug on <device>`, `wyzr plug off
+  <device>` (WYZR-13) — the three verbs the product exists to provide.
+  - `src/plug.ts`: `P3`/`P5` decoding as a closed, boolean-rejecting
+    whitelist (`1`/`0`/`"1"`/`"0"` only — a native JSON boolean is
+    REJECTED, never coerced), `get_property_list` response parsing,
+    read-back outcome classification (`confirmed`/`unconfirmed`/
+    `contradicted`), and human-readable formatting that never conflates
+    "off" with "state unknown," and never reports a `contradicted` write as
+    "failed" (a disagreeing read-back is equally consistent with a write
+    that succeeded and simply had not propagated yet).
+  - `src/device-resolve.ts`: resolves `<device>` (mac or name, exact,
+    case-insensitive, no prefix/fuzzy/substring match) against `devices
+    list`'s own projection. Two or more matches — including a
+    matches-one-device's-mac-and-a-different-device's-name case — is
+    `ambiguous_device`, never a silent choice.
+  - `src/cli-plug.ts`: wiring, on the same injectable pattern as `wyzr
+    devices list`. Write verbs perform `set_property` then exactly ONE
+    immediate `get_property_list` read-back — no sleep, no poll, no retry.
+    A read-back that throws is caught and reported as `unconfirmed`, never
+    left to surface as a bare transport error.
+  - `src/transport.ts`/`transport-http.ts`/`transport-fake.ts`: added
+    `getPropertyList`/`setProperty` to `WyzeTransport`, routed through
+    `WyzeAuthSession.getPropertyList()`/`setProperty()` (same
+    refresh-and-retry-once discipline as `getObjectList()`). The fake
+    device-list fixture now takes per-device overrides
+    (`FAKE_PLUG_ONLINE`/`FAKE_PLUG_OFFLINE`/`FAKE_PLUG_STATE_UNKNOWN`) so
+    this repo's own tests can exercise online/offline/unknown, not just
+    the original always-unknown fixture; new synthetic
+    `fakePropertyListEnvelope()`/`fakeSetPropertyEnvelope()` fixtures.
+  - `src/errors.ts`: appended `ExitCode.AmbiguousDevice` (8),
+    `ExitCode.StateUnknown` (9), `ExitCode.WriteContradicted` (10). Codes
+    9/10 are OUTCOME codes, not error codes — the command succeeded and is
+    reporting what it observed, so it prints its normal `--json` payload
+    (with a `verification: { readBacks, waitedMs }` object) and returns the
+    code, never throws; codes 0–8 use the existing `{"error": {...}}` path.
+  - Never run against real hardware — see README's "Live-device coverage".
 - `src/credentials.ts`: file-backed credentials loading from
   `$XDG_CONFIG_HOME/wyzr/credentials.json` (or `$HOME/.config/wyzr/` when
   unset) — the only way a Wyze secret enters this process. Validates the
