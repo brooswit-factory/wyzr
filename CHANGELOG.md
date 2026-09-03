@@ -42,6 +42,26 @@ All notable changes to this project are documented in this file.
   extracted from any successful envelope (login, MFA, or refresh) — before
   any caller could print one. The triple-MD5 password hash is registered
   the same way, the moment it is computed.
+- `wyzr devices list` — the first CLI command. Lists the account's devices
+  (`src/cli-devices.ts` wires `WyzeAuthSession` + `src/devices.ts`'s
+  allowlist projection + `src/output.ts`). Every device is shown; a plug is
+  marked (`isPlug`/`[PLUG]`), never filtered, because this project's
+  plug-model recognition list is known-incomplete and filtering on it risks
+  hiding an operator's real plug. `--json` emits a `schemaVersion`-tagged,
+  field-by-field-documented shape (`src/devices.ts`'s `DeviceRecord`).
+  Output is built by naming each field to expose (`mac`, `product_model`
+  → `model`, `nickname` → `name`, an inferred `conn_state` → `state`),
+  never by deleting fields from the raw API object — a dedicated test
+  proves an unexpected account-identifier-shaped field never reaches the
+  output, run red-first against a spread-based implementation. A malformed
+  or missing field on a single device entry never drops that row or
+  crashes the command; it becomes a partial row with a `note` that names
+  the field and its type, never any part of its value — also run
+  red-first. See README's "`wyzr devices list`" section for the full
+  contract, the malformed-data strategy, and everything this command
+  infers rather than confirms (notably: no captured real
+  `get_object_list` response exists anywhere, per
+  `docs/wyze-api-findings-2026-09-02.md`'s unknown #1).
 
 ### Fixed
 
