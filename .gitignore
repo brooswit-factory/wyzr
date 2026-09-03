@@ -3,5 +3,14 @@ coverage/
 .env
 .env.*
 *.local
-*credentials*
+# The actual risk is a real secrets file landing in the repo — narrowed
+# from `*credentials*`, which also matched (and would have silently
+# dropped) this story's own legitimate src/credentials.ts and
+# test/unit/credentials.test.ts. `*credentials*.json` keeps every .ts
+# source file visible while still catching wyze-credentials.json,
+# credentials-prod.json, credentials.json.bak, etc. — strictly more
+# coverage than the literal name alone, at zero cost, and this repo is
+# public. Real credentials never belong in this repo regardless of
+# filename; this is a backstop, not a substitute for that rule.
+*credentials*.json
 *.log
