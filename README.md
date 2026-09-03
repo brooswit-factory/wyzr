@@ -7,14 +7,23 @@ wyzr exists so the plug that powers an agent-workforce host can be power
 cycled from a client that depends on nothing running on that host itself —
 see the story ticket for the full motivation.
 
-**Status: foundation + credentials + transport/auth.** This repo ships the
-project skeleton, the redaction-proof output core, the typed exit-code
-layer, gating CI, file-backed credentials loading (`src/credentials.ts`),
-and now an injectable Wyze transport boundary with a real HTTP
-implementation, a fake implementation, and the auth session that logs in,
-handles MFA, and holds/refreshes tokens — still no CLI commands. Those land
-in a later story. See "Wyze transport and auth session" and "Live-device
-coverage" below.
+**Status: foundation + credentials + transport/auth + `devices list`.** This
+repo ships the project skeleton, the redaction-proof output core, the typed
+exit-code layer, gating CI, file-backed credentials loading
+(`src/credentials.ts`), an injectable Wyze transport boundary with a real
+HTTP implementation, a fake implementation, the auth session that logs in,
+handles MFA, and holds/refreshes tokens, and now the first CLI command,
+`wyzr devices list`. Reading a plug's status and turning it on/off are later
+stories. See "Wyze transport and auth session", "`wyzr devices list`", and
+"Live-device coverage" below.
+
+**Two different machines are involved, and this matters for everything
+below.** The machine you install and run `wyzr` from (call it the
+**manager machine**) is deliberately NOT the machine `wyzr` exists to power
+cycle — a last-resort lever must not depend on any software running on the
+box it saves. `~/.config/wyzr/credentials.json` (see "Credentials" below)
+lives on the manager machine, wherever that happens to be for you; this
+document intentionally never names a specific host.
 
 ## Install / usage
 
@@ -28,11 +37,14 @@ wyzr --help
 wyzr — a CLI for Wyze devices
 
 Usage: wyzr [--json] <command> [args]
+
+Commands:
+  devices list   List the account's devices.
 ```
 
-No commands are registered yet (foundation story) — every command name
-currently exits with the `Usage` error below. `--json` switches both
-success and error output to machine-readable JSON on stdout/stderr.
+`devices list` is the only registered command so far — every other command
+name exits with the `Usage` error below. `--json` switches both success and
+error output to machine-readable JSON on stdout/stderr.
 
 ## Exit codes
 
@@ -380,10 +392,11 @@ verified red-first — see the PR body. The triple-MD5 password hash
 (`src/auth-session.ts`'s `hashedPassword()`) is registered the same way,
 the moment it is computed — it is password-**equivalent** (exactly what
 authenticates on the wire), not merely password-derived. No raw API
-response is ever printed wholesale on any path; this story adds no
-`printHuman`/`printJson` call at all (no CLI command lands until the next
-story), so there is no print path
-to audit yet beyond what `src/output.ts` already covers.
+response is ever printed wholesale on any path. This story (WYZR-11) itself
+added no `printHuman`/`printJson` call — the first one lands with
+`wyzr devices list` below, which projects onto an explicit field allowlist
+rather than ever printing `getObjectList()`'s raw `data` (see "`wyzr devices
+list`" below for how).
 
 ### Two items carried forward from WYZR-10's review
 
@@ -398,6 +411,174 @@ to audit yet beyond what `src/output.ts` already covers.
   naive `!== undefined` check downstream would otherwise read `""` as
   "configured" and misfire the MFA/TOTP path above.
 
+## `wyzr devices list`
+
+Lists the account's devices — the first command a human actually runs, and
+the first output surface a downstream automation epic parses
+programmatically. Its `--json` shape is a **published interface**, not a
+convenience: see "The `--json` contract" below before changing any field.
+
+```sh
+wyzr devices list           # human-readable
+wyzr devices list --json    # machine-readable, stable shape
+```
+
+Wiring: `src/cli.ts`'s `dispatchDevices()` loads credentials
+(`loadCredentials()`), constructs a real transport (`RealWyzeTransport`),
+logs in (`WyzeAuthSession.login()`), calls `getObjectList()`, and hands the
+raw response to `src/devices.ts`'s `projectDeviceList()` before printing.
+**Every step of that pipeline is exercisable with zero credentials and zero
+network** against `FakeWyzeTransport` and fixture credentials —
+`test/unit/cli-devices.test.ts` does exactly that; `src/cli.ts`'s own
+`loadCredentials()`/`RealWyzeTransport` call sites are injectable
+(`DevicesDispatchDeps`) for the same reason `fetchImpl`/`CredentialsEnv` are
+elsewhere in this repo, and are exercised with the injection substituted,
+never for real, anywhere in this repo's test suite.
+
+### Field allowlist, not a raw dump — the hardest rule in this command
+
+`src/devices.ts`'s `projectDeviceList()` builds each output row by **naming
+every field it exposes**, one at a time (`mac`, `product_model`, `nickname`,
+`conn_state`) — it never spreads Wyze's raw per-device object and deletes
+what it doesn't want. A denylist silently leaks whatever field the API adds
+tomorrow that nobody anticipated today, and
+`docs/wyze-api-findings-2026-09-02.md` warns reverse-engineered APIs
+"routinely include tokens and account identifiers" beyond what was asked
+for — this repo is **public**, so anything printed here (including in a CI
+log) is public. `test/unit/devices.test.ts`'s "allowlist, not denylist"
+test feeds the projection a device entry carrying `access_token`,
+`refresh_token`, and `user_id` fields and asserts none reach the output;
+`test/unit/cli-devices.test.ts` does the same at the full print-output
+level with unregistered, non-token-pattern account-identifier field names
+(`user_id`/`home_id`) specifically so the assertion exercises this
+allowlist and not `src/redact.ts`'s separate generic-shape backstop. Both
+were run red-first — see the PR body for the exact output observed with the
+projection temporarily switched to a spread.
+
+### No error or diagnostic message ever reproduces a field's value
+
+Per the ticket's hardest new rule (added after WYZR-11 shipped a base32
+decoder that printed one character of a user's password into a live error):
+any diagnostic this command emits about a malformed field may name **which
+field** and **what was expected**, and may report a **type**, but never any
+part of the field's actual value — not the whole value, not a prefix, not a
+single character. `src/devices.ts`'s `fieldNote()` reports only
+`typeof`/`"array"`/`"null"`/`"undefined"`, mirroring `src/totp.ts`'s
+`base32Decode()` (which reports only a character's position, never the
+character). `test/unit/devices.test.ts`'s "malformed-field notes never
+reproduce the field's value" tests feed a field a token-shaped string of
+the wrong type and assert no part of it (not even an 8-character prefix)
+appears in the resulting diagnostic — run red-first against a version of
+`fieldNote()` that interpolated the raw value; see the PR body for the
+exact red output observed.
+
+### Malformed/unexpected data: a partial row with a marker, never a crash, never a silently dropped device
+
+Per the ticket's requirement to choose and defend a strategy: a single
+device entry with a missing or wrong-typed field **never drops that row and
+never crashes the whole command** — it becomes a partial row (`mac`/`model`
+`null`, a fallback `name`, `isPlug: false`, `state: "unknown"` as
+applicable) with a fragment-safe `note` describing which field(s) were off.
+**An emergency operator must never have their actual plug silently vanish
+from the list because one field on it came back oddly shaped** — that
+failure mode is worse than showing an imperfect row. Only a response that
+is not shaped like a device list AT ALL (`data` isn't an object, or has no
+`device_list` array) is a hard failure — `ExitCode.ApiError`,
+`wyze_device_list_malformed` — because at that point there is nothing
+per-row left to salvage. `"It never came up in tests" is not a defence` per
+the ticket, and it doesn't apply here regardless: every case above
+(missing field, wrong type, non-object entry, non-array `device_list`) has
+its own test in `test/unit/devices.test.ts`.
+
+### Plugs are marked, not filtered — and why
+
+Every device is listed; a plug is marked `[PLUG]` in human output and
+`isPlug: true` in `--json`, everything else `[?]` / `isPlug: false`.
+**Filtering was deliberately rejected.** `isPlug` is computed against
+`src/devices.ts`'s `KNOWN_PLUG_MODELS` — a small, explicitly-labeled,
+**incomplete** set (currently just `"WLPP1"`, matching the model
+`src/transport-fake.ts`'s own synthetic plug already uses) that is this
+project's own inference (tier (d)), not sourced from
+`docs/wyze-api-findings-2026-09-02.md`, which documents no model-code table
+at all. A filter-by-default design built on this same incomplete list would
+risk **hiding an operator's actual plug** behind an unrecognized model
+code — unacceptable for a tool whose entire purpose is finding the plug
+that reboots a wedged box. Marking never hides a device; `isPlug: false`
+means "not recognized," never "confirmed not a plug."
+
+### Online/offline state — an explicit, documented inference
+
+`state` (`"online"` / `"offline"` / `"unknown"`) is derived from a
+`conn_state` field (`1`/`"1"` → online, `0`/`"0"` → offline, anything else →
+`"unknown"`) that this project **infers** `get_object_list` carries at the
+device-list level. **This is NOT confirmed by the finding** — its explicit
+unknown #1 is that no real `get_object_list` response has ever been
+observed in any tier (a)/(b) source, and it documents no field names for
+this call at all. This is deliberately **distinct from the `P5`
+(reachability) property**, which the ticket's scope defence excludes
+entirely (a separate `get_property_list` call, belonging to a later story):
+`conn_state` is this project's guess at a coarser, device-list-level
+connectivity signal returned by the one call this command makes, not a
+request for `P5`. Expect every device's `state` to read `"unknown"` against
+a real account until someone corrects the field name against a live
+response — that is the honest, most likely outcome, not a bug.
+
+### The `--json` contract
+
+```json
+{
+  "schemaVersion": 1,
+  "devices": [
+    {
+      "mac": "AB12CD34EF56",
+      "model": "WLPP1",
+      "name": "Garage Plug",
+      "isPlug": true,
+      "state": "online",
+      "note": null
+    }
+  ]
+}
+```
+
+| Field                | Type                                   | Always present? | Meaning                                                                                   |
+| -------------------- | --------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------ |
+| `schemaVersion`      | `number`                                 | yes               | Bump on any field being added, removed, renamed, or changing meaning. A consumer should switch on this, not on which fields happen to exist. Currently `1`. |
+| `devices`             | `array`                                  | yes               | One entry per device Wyze's account returned, in the order `get_object_list` returned them. Never filtered — see "Plugs are marked, not filtered" above. |
+| `devices[].mac`       | `string` or `null`                       | yes (may be `null`) | The identifier device-control calls key on (paired with `model`), per the finding's Q4 table. `null` means this row's raw `mac` field was missing or not a non-empty string — the row cannot yet be acted on by a later command. |
+| `devices[].model`     | `string` or `null`                       | yes (may be `null`) | The device's `product_model`. `null` on the same malformed-field basis as `mac`. |
+| `devices[].name`      | `string`                                  | yes, never blank  | The device's `nickname`, or the literal placeholder `"(unnamed device)"` (or `"(malformed device entry)"` for a non-object entry) when missing/malformed. |
+| `devices[].isPlug`    | `boolean`                                 | yes               | `true` only if `model` matched this project's own incomplete `KNOWN_PLUG_MODELS` set. `false` means "not recognized," **never** "confirmed not a plug" — see "Plugs are marked, not filtered" above. Do not treat `false` as proof of anything. |
+| `devices[].state`     | `"online"` \| `"offline"` \| `"unknown"`  | yes               | See "Online/offline state" above — an explicit, undocumented-by-the-finding inference. Expect `"unknown"` against a real account until corrected. |
+| `devices[].note`      | `string` or `null`                       | yes (usually `null`) | `null` on a clean row. Otherwise names which field(s) were malformed and what type was expected — **never any part of the field's actual value** (see "No error or diagnostic message ever reproduces a field's value" above). |
+
+Consumers should treat an unrecognized future field as ignorable (this
+command will only ever ADD fields within a `schemaVersion`, never repurpose
+one) and should not assume `devices` is non-empty, or that any two `mac`
+values are distinct beyond what Wyze itself guarantees (unverified against
+reality — see below).
+
+### Errors
+
+`devices list` maps every failure onto the exit-code table above:
+credentials problems and Wyze auth failures surface with their existing
+codes from `src/wyze-errors.ts` (`credentials_invalid`, `mfa_required`,
+etc.); a response that isn't shaped like a device list at all surfaces
+`api_error` / `wyze_device_list_malformed` (see "Malformed/unexpected data"
+above). `--json` mode's error path is the same documented
+`{"error": {...}}` shape as every other command — no separate JSON error
+mechanism was invented.
+
+### This command has never been exercised against a real Wyze account or device
+
+Every path `wyzr devices list` takes — login, `getObjectList()`, and this
+command's own field allowlist, plug-recognition list, and connectivity-field
+guess — is, like everything else in this repo, unverified against reality.
+A green test suite here proves this code matches this project's own belief
+about the Wyze API's shape; it **cannot** prove that belief is correct. See
+"Live-device coverage" immediately below for the full statement this
+applies to.
+
 ## Live-device coverage
 
 **Nothing in this repo has ever been exercised against a real Wyze account
@@ -408,16 +589,33 @@ against RFC 6238's own vectors but has never answered a real challenge;
 the MFA-detection field names and the `submitMfa`/`getObjectList` request
 shapes are this author's inference, not a confirmed contract; the token
 lifetimes and refresh behavior are only as documented in the
-finding, at reduced confidence, never observed directly. Every path in
-this repo is exercisable end to end against `FakeWyzeTransport` with no
-credential present at all — that is the design, not a limitation — but a
-green suite here proves this code matches this repo's own belief about the
-Wyze API, and **cannot** tell you that belief is wrong. A green CI badge
-reflects the scaffold and this story's logic (typecheck/lint/test/coverage
-/no-direct-console), not hardware or live-API coverage. Later stories that
-add real device interaction are expected to update this section — a green
-badge must never be read as implying hardware or a real account has been
-touched until it says so here explicitly.
+finding, at reduced confidence, never observed directly.
+
+**`wyzr devices list` adds no exception to any of this.** Its `mac`/
+`product_model`/`nickname` field names, its `conn_state`
+online/offline-inference field name, and its `KNOWN_PLUG_MODELS` plug-model
+list are this project's own inference (tier (d) at best), never confirmed
+against a real `get_object_list` response — the finding's explicit unknown
+#1 is that no such response has ever been captured in any tier (a)/(b)
+source. Expect, specifically: every device's `state` to read `"unknown"`
+until `conn_state`'s field name is corrected against a live account; a real
+plug with an unrecognized model code to show `isPlug: false` until
+`KNOWN_PLUG_MODELS` is corrected; and `mac`/`model` to read `null` if the
+real field names differ from `mac`/`product_model`. None of these are bugs
+in the sense of failing this repo's own test suite — the suite tests this
+code against its own synthetic fixtures, which is exactly the limitation
+this section exists to name.
+
+Every path in this repo — including `wyzr devices list` end to end — is
+exercisable against `FakeWyzeTransport` with no credential present at all —
+that is the design, not a limitation — but a green suite here proves this
+code matches this repo's own belief about the Wyze API, and **cannot** tell
+you that belief is wrong. A green CI badge reflects the scaffold and this
+story's logic (typecheck/lint/test/coverage/no-direct-console), not hardware
+or live-API coverage. Later stories that add real device interaction are
+expected to update this section — a green badge must never be read as
+implying hardware or a real account has been touched until it says so here
+explicitly.
 
 ## Development
 

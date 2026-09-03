@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { parseArgs, run } from "../../src/cli.ts";
+import { defaultDevicesDispatchDeps, dispatchDevices, parseArgs, run } from "../../src/cli.ts";
+import type { Credentials } from "../../src/credentials.ts";
 import { CliError, ExitCode } from "../../src/errors.ts";
 import { REDACTED, registerSecret, resetSecretsForTesting } from "../../src/redact.ts";
+import { FakeWyzeTransport } from "../../src/transport-fake.ts";
+import { RealWyzeTransport } from "../../src/transport-http.ts";
 
 afterEach(() => {
   resetSecretsForTesting();
@@ -48,6 +51,67 @@ describe("run — default dispatch (no commands registered yet)", () => {
     expect(code).toBe(ExitCode.Usage);
     expect(errSpy).toHaveBeenCalledWith("Unknown command: frobnicate");
     errSpy.mockRestore();
+  });
+});
+
+describe("run — devices command routing (subcommand validation only; the real `devices list` wiring is src/cli-devices.ts's own tests, against the fake transport)", () => {
+  test("`devices` with no subcommand is a Usage error, not a network/credentials attempt", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["devices"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy).toHaveBeenCalledWith("Usage: wyzr devices list [--json]");
+    errSpy.mockRestore();
+  });
+
+  test("`devices frobnicate` (an unknown subcommand) is a Usage error naming it", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["devices", "frobnicate"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy).toHaveBeenCalledWith("Unknown devices subcommand: frobnicate");
+    errSpy.mockRestore();
+  });
+
+  // Exercises dispatchDevices()'s real (production) wiring shape —
+  // loadCredentials() + a transport — with both injected, so this covers
+  // the "list" branch (src/cli.ts's own loadCredentials()/RealWyzeTransport
+  // call sites are otherwise unreachable from a zero-credentials,
+  // zero-network unit suite). See src/cli-devices.ts's own tests for the
+  // full behavioral coverage of what runDevicesList() then does.
+  test("`devices list` calls the injected loadCredentials + transport and returns Ok", async () => {
+    const fakeCreds: Credentials = {
+      email: "test-account@example.invalid",
+      password: "fake-test-password-000",
+      keyId: "fake-key-id-000",
+      keySecret: "fake-key-secret-000",
+      totpSecret: undefined,
+    };
+    const transport = new FakeWyzeTransport();
+    let loadCredentialsCalls = 0;
+    let createTransportCalls = 0;
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+
+    const code = await dispatchDevices(["list"], true, {
+      loadCredentials: async () => {
+        loadCredentialsCalls += 1;
+        return fakeCreds;
+      },
+      createTransport: () => {
+        createTransportCalls += 1;
+        return transport;
+      },
+    });
+
+    expect(code).toBe(ExitCode.Ok);
+    expect(loadCredentialsCalls).toBe(1);
+    expect(createTransportCalls).toBe(1);
+    logSpy.mockRestore();
+  });
+
+  // The production default's transport construction — a plain `new
+  // RealWyzeTransport()` performs no I/O until a method on it is actually
+  // called, so constructing (never calling) it here is zero-network.
+  test("defaultDevicesDispatchDeps.createTransport() constructs a RealWyzeTransport", () => {
+    expect(defaultDevicesDispatchDeps.createTransport()).toBeInstanceOf(RealWyzeTransport);
   });
 });
 
