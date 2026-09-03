@@ -15,6 +15,7 @@
 // credentials path or the network.
 
 import { runDevicesList } from "./cli-devices.ts";
+import { runPlugStatus, runPlugWrite } from "./cli-plug.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
 import { printError, printHuman, printJsonError } from "./output.ts";
@@ -104,9 +105,50 @@ export async function dispatchDevices(
   return runDevicesList({ transport, credentials }, json);
 }
 
+/** Same injectable-wiring pattern as DevicesDispatchDeps above, for `plug`. */
+export interface PlugDispatchDeps {
+  loadCredentials: () => Promise<Credentials>;
+  createTransport: () => WyzeTransport;
+}
+
+export const defaultPlugDispatchDeps: PlugDispatchDeps = {
+  loadCredentials,
+  createTransport: () => new RealWyzeTransport(),
+};
+
+/** `plug`'s own subcommand routing: `status`, `on`, `off`, each requiring
+ * exactly one `<device>` argument (a mac or a name — see
+ * src/device-resolve.ts). Anything else — no subcommand, an unrecognized
+ * one, or a recognized one with no device argument — is a Usage error. */
+export async function dispatchPlug(
+  rest: string[],
+  json: boolean,
+  deps: PlugDispatchDeps = defaultPlugDispatchDeps,
+): Promise<number> {
+  const [sub, device] = rest;
+  if (sub !== "status" && sub !== "on" && sub !== "off") {
+    throw new CliError(
+      sub ? `Unknown plug subcommand: ${sub}` : "Usage: wyzr plug <status|on|off> <device> [--json]",
+      ExitCode.Usage,
+    );
+  }
+  if (!device) {
+    throw new CliError(`Usage: wyzr plug ${sub} <device> [--json]`, ExitCode.Usage);
+  }
+  const credentials = await deps.loadCredentials();
+  const transport = deps.createTransport();
+  if (sub === "status") {
+    return runPlugStatus({ transport, credentials }, device, json);
+  }
+  return runPlugWrite({ transport, credentials }, device, sub, json);
+}
+
 const defaultDispatch: Dispatch = async (command, rest, opts) => {
   if (command === "devices") {
     return dispatchDevices(rest, opts.json);
+  }
+  if (command === "plug") {
+    return dispatchPlug(rest, opts.json);
   }
   throw new CliError(`Unknown command: ${command}`, ExitCode.Usage);
 };
@@ -125,7 +167,10 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
       "wyzr — a CLI for Wyze devices\n\n" +
         "Usage: wyzr [--json] <command> [args]\n\n" +
         "Commands:\n" +
-        "  devices list   List the account's devices.",
+        "  devices list           List the account's devices.\n" +
+        "  plug status <device>   Report whether a plug is on/off, and reachable.\n" +
+        "  plug on <device>       Turn a plug on (read back to confirm).\n" +
+        "  plug off <device>      Turn a plug off (read back to confirm).",
     );
     return ExitCode.Ok;
   }

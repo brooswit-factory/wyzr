@@ -15,8 +15,10 @@ import { CliError, ExitCode } from "./errors.ts";
 import { registerSecret } from "./redact.ts";
 import type {
   GetObjectListRequest,
+  GetPropertyListRequest,
   LoginRequest,
   RefreshTokenRequest,
+  SetPropertyRequest,
   SubmitMfaRequest,
   WyzeTransport,
 } from "./transport.ts";
@@ -24,8 +26,10 @@ import {
   WYZE_API_HOST,
   WYZE_AUTH_HOST,
   WYZE_GET_OBJECT_LIST_PATH,
+  WYZE_GET_PROPERTY_LIST_PATH,
   WYZE_LOGIN_PATH,
   WYZE_REFRESH_TOKEN_PATH,
+  WYZE_SET_PROPERTY_PATH,
 } from "./transport.ts";
 import type { WyzeEnvelope } from "./wyze-envelope.ts";
 
@@ -92,6 +96,37 @@ export class RealWyzeTransport implements WyzeTransport {
     // field, not a header, was the anticipated shape.
     return this.post(`https://${WYZE_API_HOST}${WYZE_GET_OBJECT_LIST_PATH}`, {
       access_token: req.accessToken,
+    });
+  }
+
+  async getPropertyList(req: GetPropertyListRequest): Promise<WyzeEnvelope> {
+    // Body field names (`target_pid_list`, and reusing `mac`/`model` as
+    // get_object_list's projection already names them) are this project's
+    // own inference — docs/wyze-api-findings-2026-09-02.md's explicit
+    // unknown #1 is that no real request/response for this call was ever
+    // captured. `target_pid_list` is chosen by analogy with
+    // get_object_list's own `device_list` wrapper key, not a confirmed
+    // contract; see src/plug.ts's top comment for the response-side version
+    // of the same caveat.
+    return this.post(`https://${WYZE_API_HOST}${WYZE_GET_PROPERTY_LIST_PATH}`, {
+      access_token: req.accessToken,
+      mac: req.mac,
+      model: req.model,
+      target_pid_list: req.targetPids,
+    });
+  }
+
+  async setProperty(req: SetPropertyRequest): Promise<WyzeEnvelope> {
+    // `value` is `req.value` verbatim — typed `0 | 1` on the request
+    // (src/transport.ts), so JSON.stringify emits a bare integer, never a
+    // boolean or a string. This is decision (A) enforced at the wire, not
+    // just at the decode-response layer (src/plug.ts's decodeP3()).
+    return this.post(`https://${WYZE_API_HOST}${WYZE_SET_PROPERTY_PATH}`, {
+      access_token: req.accessToken,
+      mac: req.mac,
+      model: req.model,
+      pid: req.pid,
+      value: req.value,
     });
   }
 

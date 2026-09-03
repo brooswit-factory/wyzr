@@ -143,6 +143,48 @@ describe("RealWyzeTransport.getObjectList", () => {
   });
 });
 
+describe("RealWyzeTransport.getPropertyList", () => {
+  test("POSTs to the get_property_list path with access token, mac, model, and target pids", async () => {
+    const { fetchImpl, calls } = makeFetch({ code: "1", msg: "", data: { property_list: [] } });
+    const transport = new RealWyzeTransport({ fetchImpl });
+
+    await transport.getPropertyList({ accessToken: "at-000", mac: "MAC0", model: "WLPP1", targetPids: ["P3", "P5"] });
+
+    expect(calls[0]!.url).toBe(`https://${WYZE_API_HOST}/app/v2/device/get_property_list`);
+    const body = JSON.parse(calls[0]!.init?.body as string);
+    expect(body).toEqual({ access_token: "at-000", mac: "MAC0", model: "WLPP1", target_pid_list: ["P3", "P5"] });
+  });
+});
+
+describe("RealWyzeTransport.setProperty", () => {
+  test("POSTs to the set_property path with mac, model, pid, and value", async () => {
+    const { fetchImpl, calls } = makeFetch({ code: "1", msg: "", data: {} });
+    const transport = new RealWyzeTransport({ fetchImpl });
+
+    await transport.setProperty({ accessToken: "at-000", mac: "MAC0", model: "WLPP1", pid: "P3", value: 1 });
+
+    expect(calls[0]!.url).toBe(`https://${WYZE_API_HOST}/app/v2/device/set_property`);
+    const body = JSON.parse(calls[0]!.init?.body as string);
+    expect(body).toEqual({ access_token: "at-000", mac: "MAC0", model: "WLPP1", pid: "P3", value: 1 });
+  });
+
+  // Decision (A) enforced at the wire: this project's own request type
+  // (`SetPropertyRequest.value: 0 | 1`) makes a boolean a compile error, but
+  // this test proves the value that actually leaves the process over the
+  // wire is a bare JSON number, never `true`/`false` or a string.
+  test("sends value as a bare JSON number, never a boolean or a string", async () => {
+    const { fetchImpl, calls } = makeFetch({ code: "1", msg: "", data: {} });
+    const transport = new RealWyzeTransport({ fetchImpl });
+
+    await transport.setProperty({ accessToken: "at", mac: "m", model: "md", pid: "P3", value: 0 });
+
+    const rawBody = calls[0]!.init?.body as string;
+    expect(rawBody).toContain('"value":0');
+    expect(rawBody).not.toContain('"value":"0"');
+    expect(rawBody).not.toContain('"value":false');
+  });
+});
+
 describe("RealWyzeTransport — token redaction the moment a response is parsed", () => {
   test("registers access_token and refresh_token found in `data` before returning", async () => {
     const { fetchImpl } = makeFetch({

@@ -38,8 +38,29 @@ describe("ExitCode", () => {
       ExitCode.Network,
       ExitCode.ApiError,
       ExitCode.MfaRequired,
+      ExitCode.AmbiguousDevice,
+      ExitCode.StateUnknown,
+      ExitCode.WriteContradicted,
     ];
     expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  // WYZR-13 decision (B): append-only — 0-7 must never move.
+  test("0-7 are untouched by WYZR-13's additions", () => {
+    expect(ExitCode.Ok).toBe(0);
+    expect(ExitCode.Generic).toBe(1);
+    expect(ExitCode.Usage).toBe(2);
+    expect(ExitCode.CredentialsInvalid).toBe(3);
+    expect(ExitCode.NotFound).toBe(4);
+    expect(ExitCode.Network).toBe(5);
+    expect(ExitCode.ApiError).toBe(6);
+    expect(ExitCode.MfaRequired).toBe(7);
+  });
+
+  test("WYZR-13 appends 8/9/10 as ambiguous_device/state_unknown/write_contradicted", () => {
+    expect(ExitCode.AmbiguousDevice).toBe(8);
+    expect(ExitCode.StateUnknown).toBe(9);
+    expect(ExitCode.WriteContradicted).toBe(10);
   });
 });
 
