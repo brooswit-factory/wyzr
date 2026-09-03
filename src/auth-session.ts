@@ -195,11 +195,30 @@ export class WyzeAuthSession {
     throw wyzeRefreshFailedError(envelope);
   }
 
-  /** The one call the next task (`wyzr devices list`) needs from this
-   * interface. Authenticates via the held access token, refreshing and
-   * retrying exactly once on an expired token. */
+  /** The one call `wyzr devices list` needs from this interface.
+   * Authenticates via the held access token, refreshing and retrying
+   * exactly once on an expired token. */
   async getObjectList(): Promise<unknown> {
     return this.callAuthenticated((accessToken) => this.deps.transport.getObjectList({ accessToken }));
+  }
+
+  /** WYZR-13's addition, for `wyzr plug status` and the read-back half of
+   * `wyzr plug on`/`off` (decision (D)). Same refresh-and-retry-once
+   * discipline as every other authenticated call here — no separate
+   * polling/retry loop of its own; decision (D) forbids one entirely. */
+  async getPropertyList(mac: string, model: string, targetPids: string[]): Promise<unknown> {
+    return this.callAuthenticated((accessToken) =>
+      this.deps.transport.getPropertyList({ accessToken, mac, model, targetPids }),
+    );
+  }
+
+  /** WYZR-13's addition, for `wyzr plug on`/`off`'s write half. `value` is
+   * `0 | 1`, never `boolean` — decision (A) enforced at this call's own
+   * signature, not just downstream. */
+  async setProperty(mac: string, model: string, pid: string, value: 0 | 1): Promise<unknown> {
+    return this.callAuthenticated((accessToken) =>
+      this.deps.transport.setProperty({ accessToken, mac, model, pid, value }),
+    );
   }
 
   private async callAuthenticated(

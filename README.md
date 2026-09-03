@@ -7,23 +7,29 @@ wyzr exists so the plug that powers an agent-workforce host can be power
 cycled from a client that depends on nothing running on that host itself —
 see the story ticket for the full motivation.
 
-**Status: foundation + credentials + transport/auth + `devices list`.** This
-repo ships the project skeleton, the redaction-proof output core, the typed
-exit-code layer, gating CI, file-backed credentials loading
-(`src/credentials.ts`), an injectable Wyze transport boundary with a real
-HTTP implementation, a fake implementation, the auth session that logs in,
-handles MFA, and holds/refreshes tokens, and now the first CLI command,
-`wyzr devices list`. Reading a plug's status and turning it on/off are later
-stories. See "Wyze transport and auth session", "`wyzr devices list`", and
-"Live-device coverage" below.
+**Status: foundation + credentials + transport/auth + `devices list` +
+`plug status`/`plug on`/`plug off`.** This repo ships the project skeleton,
+the redaction-proof output core, the typed exit-code layer, gating CI,
+file-backed credentials loading (`src/credentials.ts`), an injectable Wyze
+transport boundary with a real HTTP implementation, a fake implementation,
+the auth session that logs in, handles MFA, and holds/refreshes tokens,
+`wyzr devices list`, and now the three verbs the whole product exists to
+provide: `wyzr plug status|on|off`. See "Wyze transport and auth session",
+"`wyzr devices list`", "`wyzr plug status|on|off`", and "Live-device
+coverage" below.
 
-**Two different machines are involved, and this matters for everything
-below.** The machine you install and run `wyzr` from (call it the
-**manager machine**) is deliberately NOT the machine `wyzr` exists to power
-cycle — a last-resort lever must not depend on any software running on the
-box it saves. `~/.config/wyzr/credentials.json` (see "Credentials" below)
-lives on the manager machine, wherever that happens to be for you; this
-document intentionally never names a specific host.
+**Three different machines are involved, and this matters for everything
+below.** wyzr is installed and run from **the operator's own machine** (call
+it the **manager machine**) — deliberately NOT the machine `wyzr` exists to
+power cycle, and NOT the machine any given `wyzr` *process* (an agent,
+CI, whatever built or is reading this repo) happens to be running on right
+now. Those can be three genuinely different boxes. A last-resort lever must
+not depend on any software running on the box it saves, so "where does wyzr
+install" is answered **functionally** — the machine an operator runs it from
+— never by naming a specific host. `~/.config/wyzr/credentials.json` (see
+"Credentials" below) lives on the manager machine, whatever that happens to
+be for you; this document intentionally never names a specific host, and
+nothing in this repo should ever gain one.
 
 ## Install / usage
 
@@ -39,12 +45,17 @@ wyzr — a CLI for Wyze devices
 Usage: wyzr [--json] <command> [args]
 
 Commands:
-  devices list   List the account's devices.
+  devices list           List the account's devices.
+  plug status <device>   Report whether a plug is on/off, and reachable.
+  plug on <device>        Turn a plug on (read back to confirm).
+  plug off <device>       Turn a plug off (read back to confirm).
 ```
 
-`devices list` is the only registered command so far — every other command
-name exits with the `Usage` error below. `--json` switches both success and
-error output to machine-readable JSON on stdout/stderr.
+`--json` switches success output to machine-readable JSON on stdout and
+error output to machine-readable JSON on stderr — see "Errors under
+`--json`" below for the error shape, and "Two classes of non-zero exit
+code" for why a "success" `--json` payload is not the same thing as "exit
+code 0."
 
 ## Exit codes
 
@@ -53,21 +64,57 @@ Defined in `src/errors.ts` (`ExitCode`). `CliError` carries one of these;
 or otherwise) to the process's exit code. New codes may be added by later
 stories — the numbers already assigned here never change or get reused.
 
-| Code | Name                 | Meaning                                          |
-| ---- | -------------------- | ------------------------------------------------- |
-| 0    | `ok`                 | Success.                                           |
-| 1    | `generic`             | Unexpected/uncategorized error.                    |
-| 2    | `usage`               | Bad flags/arguments, or an unknown command.        |
-| 3    | `credentials_invalid` | Credentials missing or invalid.                    |
-| 4    | `not_found`           | Requested device/resource does not exist.          |
-| 5    | `network`             | Transport/network failure — no response at all.    |
-| 6    | `api_error`           | The API responded, but with an error.              |
-| 7    | `mfa_required`        | An MFA challenge could not be answered automatically. |
+| Code | Name                  | Meaning                                                |
+| ---- | --------------------- | ------------------------------------------------------- |
+| 0    | `ok`                  | Success.                                                 |
+| 1    | `generic`             | Unexpected/uncategorized error.                          |
+| 2    | `usage`               | Bad flags/arguments, or an unknown command.              |
+| 3    | `credentials_invalid` | Credentials missing or invalid.                          |
+| 4    | `not_found`           | Requested device/resource does not exist.                |
+| 5    | `network`             | Transport/network failure — no response at all.          |
+| 6    | `api_error`           | The API responded, but with an error.                    |
+| 7    | `mfa_required`        | An MFA challenge could not be answered automatically.    |
+| 8    | `ambiguous_device`    | `<device>` matched more than one device; never guessed between them. |
+| 9    | `state_unknown`       | `plug status`: P3 and/or P5 could not be decoded. `plug on`/`off`: the write was accepted but the read-back could not be obtained or decoded — see "Two classes of non-zero exit code" below; this does NOT mean the write did nothing. |
+| 10   | `write_contradicted`  | `plug on`/`off` only: the read-back succeeded and shows a state other than the one requested. **This does NOT mean the write failed** — see "Two classes of non-zero exit code" below; it is equally consistent with a write that succeeded and simply had not propagated by the time of this one, immediate, no-wait read. |
+
+Codes 8/9/10 were added by `wyzr plug status|on|off` (WYZR-13), appending
+only — 0–7 are unchanged from earlier stories.
+
+### Two classes of non-zero exit code
+
+**Codes `2`/`3`/`4`/`5`/`6`/`8` are ERROR codes.** Something kept the
+command from doing its job at all. These are thrown as a `CliError`,
+handled by `src/cli.ts`'s single error boundary, and printed under
+`--json` as the `{"error": {...}}` envelope below, on stderr.
+
+**Codes `9`/`10` are OUTCOME codes, not error codes.** The command
+*succeeded* at doing its job — it wrote (for `plug on`/`off`) or read (for
+`plug status`) and is reporting exactly what it observed. It prints its
+**normal, documented `--json` payload** (see "`wyzr plug status|on|off`"
+below) to **stdout**, and returns the non-zero code — it never throws, and
+`--json` mode never wraps a `9`/`10` result in the `{"error": {...}}` shape.
+An error envelope would discard the very fields (`requested`,
+`observedPower`, `verification`) that let an operator or a downstream
+caller reason for itself about what happened; that is the reasoning this
+split exists to preserve. A genuine transport failure on `plug status` —
+nothing written, nothing observed — is still an ordinary error code (e.g.
+`network`/`api_error`), never folded into `9`.
+
+**Neither `9` nor `10` is a claim that a write did nothing.** `9` on the
+write path means the write was accepted by Wyze AND its resulting state
+could not be read back — both halves matter; "state unreadable" is not
+"the write did nothing." `10` means only that a single, immediate, no-wait
+read-back disagreed with what was requested — indistinguishable, in one
+read, from the change simply not having propagated yet. wyzr's own human-
+readable text for both never claims the write itself failed; see
+"`wyzr plug status|on|off`" below.
 
 ## Errors under `--json`
 
-On any error, `--json` mode prints exactly one JSON value to **stderr**
-(never stdout) instead of a prose message:
+On any ERROR code (see "Two classes of non-zero exit code" above), `--json`
+mode prints exactly one JSON value to **stderr** (never stdout) instead of
+a prose message:
 
 ```json
 {
@@ -89,6 +136,10 @@ On any error, `--json` mode prints exactly one JSON value to **stderr**
   `null` when the code alone is specific enough.
 - `message` — a human-readable description. Never parse this for control
   flow; it can change wording between versions.
+
+This is the **only** error shape in this CLI. `plug status`/`plug on`/
+`plug off`'s `9`/`10` outcomes do NOT use it — see "Two classes of non-zero
+exit code" above.
 
 ## The output core (security-critical)
 
@@ -579,6 +630,252 @@ about the Wyze API's shape; it **cannot** prove that belief is correct. See
 "Live-device coverage" immediately below for the full statement this
 applies to.
 
+## `wyzr plug status|on|off`
+
+The three verbs `wyzr` exists to provide (WYZR-13): report whether a plug
+is on or off and reachable, and turn it on or off — each with a mandatory
+`<device>` argument (a device's `mac`, or its `name`, both resolved through
+`devices list`'s own projection — see "Device resolution" below).
+
+```sh
+wyzr plug status "Garage Plug"      # human-readable
+wyzr plug status AB12CD34EF56 --json
+wyzr plug on "Garage Plug"
+wyzr plug off AB12CD34EF56 --json
+```
+
+Wiring: `src/cli-plug.ts`'s `runPlugStatus()`/`runPlugWrite()`, on the same
+injectable pattern as `wyzr devices list` (`src/cli.ts`'s `dispatchPlug()`
+supplies `loadCredentials()`/`RealWyzeTransport` for real; every test in
+this repo supplies `FakeWyzeTransport` and fixture credentials instead —
+zero credentials, zero network, throughout `test/unit/plug.test.ts`,
+`test/unit/device-resolve.test.ts`, and `test/unit/cli-plug.test.ts`).
+
+### Why this exists, and the two failure modes it exists to prevent
+
+A downstream, safety-critical epic reads `plug status`'s output to decide
+whether to power-cycle a live server, and calls `plug on`/`plug off` to
+actually do it. Two collapses are unacceptable here, and this command's
+entire design is built around refusing both:
+
+1. **"Off" and "I could not determine the state" must never be conflated.**
+   `P3` alone (the plug's power PID) cannot tell "off" apart from
+   "unreachable" — that is what `P5` (reachability) is for. See "Device
+   state: P3/P5 decoding" and "`plug status`'s off-vs-unknown rule" below.
+2. **A disagreeing read-back after a write must never be reported as "the
+   write failed."** It is equally consistent with a write that succeeded
+   and simply had not propagated by the time of one, immediate, no-wait
+   read. See "Write verbs: read-back policy" below.
+
+### Device resolution — never guess
+
+`<device>` is matched against `devices list`'s projection (`src/devices.ts`
+`DeviceRecord[]`, via `src/device-resolve.ts`'s `resolveDevice()`) by:
+
+- **`mac`, case-insensitive, EXACT match only**, or
+- **`name`, case-insensitive, EXACT match only.**
+
+**No prefix, fuzzy, or substring matching anywhere.** A near-match is a
+`not_found`, never a guess. Two or more devices matching — including the
+case where the argument matches one device's `mac` AND a **different**
+device's `name` — is `ambiguous_device` (exit `8`), never a silent
+mac-wins precedence; the error lists every match's `mac`/`model`/`name` so
+the operator can retry unambiguously. Zero matches is `not_found` (exit
+`4`). A device that resolves to exactly one match but whose projected
+`mac` or `model` is `null` (`devices list`'s own partial-row case) cannot
+be addressed by a property call — a clear error names which field was
+missing; wyzr never sends a property request with a null field in it.
+`test/unit/device-resolve.test.ts` covers all of the above, including the
+mac-matches-one/name-matches-another ambiguity as its own dedicated test.
+
+### Device state: P3/P5 decoding — a closed, boolean-rejecting whitelist
+
+Per the finding's §Q4, `P3` (power) and `P5` (reachability) are both wire-
+encoded as an **integer**, `0` or `1` — never a native JSON boolean.
+`src/plug.ts`'s `decodeP3()`/`decodeP5()` accept **exactly** the number
+`1`/`0` and the string `"1"`/`"0"` (the string form defensive, mirroring
+`src/devices.ts`'s `classifyState()` precedent). **Everything else,
+including a native JSON `true`/`false`, decodes to `"unknown"`
+(`P3`)/`null` (`P5`) — REJECTED, never helpfully coerced.** A boolean is
+precisely the silently-wrong wire assumption the finding warns about;
+degrading loudly to "unknown" on a wrong guess about the wire type is safer
+than a confident misread. `test/unit/plug.test.ts` ships a dedicated
+boolean-rejection test for each, run red-first (see the PR body for the
+actual red output observed when `decodeP3`/`decodeP5` were temporarily
+changed to coerce `true`/`false`).
+
+`src/plug.ts`'s `readPlugState()` reads `P3` and `P5` out of a
+`get_property_list` response **independently of one another — reachability
+is NEVER inferred from `P3`.** A response that is not shaped the way this
+project expects (`data.property_list` as a list of `{pid, value}` entries —
+this project's own inference; see the module's top comment, and ticket item
+7's "recoverable parse error, never a silent misread") never throws; it
+resolves to an unknown/undecodable reading instead, with a fragment-safe
+`note` (field name and value TYPE only — never any part of the value
+itself, same rule as `src/devices.ts`'s `fieldNote()`).
+
+### `plug status`'s off-vs-unknown rule
+
+`plug status` exits `0` **only when BOTH `P3` and `P5` decode.** If either
+is `"unknown"`/`null`, it exits `state_unknown` (`9`) instead, and **the
+human-readable output never prints a bare "on"/"off"** — it prints
+`STATE UNKNOWN` naming which of power/reachability could not be determined,
+with an explicit disclaimer that this is not the same as "off." Rationale:
+with `P5` undetermined, a `P3` of `0` cannot be confidently called "off"
+rather than a stale or unreachable reading — the off-vs-unknown distinction
+is the entire reason `P5` is read at all. The `--json` output states
+precisely which of the two was undetermined (`power`/`reachable`
+individually) even though the exit code alone is coarse. A `P5` that
+decodes to `false` (confirmed unreachable) is still a **decodable** value,
+not an "unknown" one — it does not by itself force `state_unknown` if `P3`
+also decoded — but human output still flags it (`"UNREACHABLE — this
+reading may be stale"`) rather than reporting the pairing silently.
+`test/unit/plug.test.ts` and `test/unit/cli-plug.test.ts` both ship a
+dedicated red-first test for this rule (see the PR body for the actual red
+output observed when the known/unknown branch was collapsed to always
+report a confident state).
+
+### Write verbs: read-back policy, and what the outcome codes may claim
+
+Each of `plug on`/`plug off`: performs `set_property` (`P3 = 1` for on,
+`P3 = 0` for off — sent as a **bare JSON integer**, never a boolean or a
+string; `SetPropertyRequest.value`'s own type, `0 | 1`, makes a boolean a
+compile error), then performs **exactly ONE immediate `get_property_list`
+read of `P3` and `P5`.** No sleep, no polling, no retry loop, no timer of
+any kind, anywhere in this path. Two reasons: the finding names
+login-endpoint rate limiting as a specific hazard and this repo's transport
+is deliberately retry-free elsewhere too; and a real-timer-driven poll
+would make this suite's tests non-deterministic.
+
+Three outcomes, from comparing the read-back against what was requested:
+
+- **`confirmed`** — the read-back's `P3` matches what was requested. Exit
+  `0`.
+- **`unconfirmed`** — the read-back could not be obtained (the
+  `get_property_list` call itself threw — CAUGHT here, never left to
+  surface as a bare, uncaught transport error, because that would hide
+  that the write was already accepted) or `P3` came back undecodable/
+  absent. Exit `state_unknown` (`9`).
+- **`contradicted`** — the read-back succeeded and shows a `P3` value other
+  than the one requested. Exit `write_contradicted` (`10`).
+
+**The one thing `set_property` itself failing (throwing before any write
+was accepted) is NOT: an outcome.** That propagates as a normal error
+(`network`/`api_error`/etc, per "Two classes of non-zero exit code" above)
+— nothing was written, so there is no confirmed/unconfirmed/contradicted
+outcome to report.
+
+**What exit `10` — and `9` on the write path — are and are NOT allowed to
+claim**, per the story epic's explicit review of this design:
+
+- **Exit `10` means "the read-back at this instant did not agree with the
+  write." It does NOT mean "the write failed."** wyzr cannot distinguish
+  propagation lag on a write that actually succeeded from a write that had
+  no effect — a single immediate read cannot tell those apart — so `10` can
+  fire on a write that genuinely worked. A caller that reads `10` as "the
+  write failed" and acts again on an already-changed plug causes real harm;
+  this is the same shape as "unknown misread as off," one layer up. wyzr's
+  human-readable text for `contradicted` therefore reports only what was
+  observed (a disagreement) and explicitly never says the write failed.
+- **Exit `9` on the write path means the write WAS accepted AND its
+  resulting state could not be read — both halves, always.** "State
+  unreadable" is not "the write did nothing"; wyzr's human-readable text
+  says so plainly, never just one half.
+- `test/unit/plug.test.ts` ships a dedicated test asserting this wording
+  rule directly (not just the exit code) — it fails if `contradicted`'s
+  formatter ever starts describing the write itself as failed.
+
+### The `--json` contract
+
+Its own exported `PLUG_SCHEMA_VERSION` (`src/plug.ts`), starting at `1`,
+following `DEVICE_LIST_SCHEMA_VERSION`'s precedent. **Additive-only** — a
+downstream safety-critical epic parses this; fields may be added within a
+schema version, never renamed or removed.
+
+`plug status`:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "plug status",
+  "device": { "mac": "AB12CD34EF56", "model": "WLPP1", "name": "Garage Plug" },
+  "power": "on",
+  "reachable": true,
+  "note": null
+}
+```
+
+`plug on` / `plug off`:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "plug on",
+  "device": { "mac": "AB12CD34EF56", "model": "WLPP1", "name": "Garage Plug" },
+  "requested": "on",
+  "result": "confirmed",
+  "observedPower": "on",
+  "reachable": true,
+  "verification": { "readBacks": 1, "waitedMs": 0 },
+  "note": null
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `power` / `observedPower` | `"on"` \| `"off"` \| `"unknown"` | Same three-value vocabulary on both commands. `"unknown"` is a first-class value — never `null`, never omitted, never conflated with `"off"`. |
+| `reachable` | `true` \| `false` \| `null` | `null` for undetermined, mirroring how the error contract already uses `null` for "nothing finer to say." |
+| `result` (write only) | `"confirmed"` \| `"unconfirmed"` \| `"contradicted"` | See "Write verbs: read-back policy" above. |
+| `verification` (write only) | `{ readBacks: number, waitedMs: number }` | Always `{ readBacks: 1, waitedMs: 0 }` in this codebase (decision (D) forbids any retry/wait) — machine-readable proof of that fact, not an assumption a caller has to trust. Lets a caller decide FOR ITSELF whether to re-read on its own schedule to rule out propagation lag; that decision is never wyzr's to make. |
+| `note` | `string` \| `null` | `null` on a clean reading. Otherwise names which field(s) were undecodable/malformed and what TYPE was expected — never any part of the actual value (same rule as `devices list`'s `note`). |
+
+Errors (exit codes `2`/`3`/`4`/`5`/`6`/`8`) use the existing
+`{"error": {...}}` shape from "Errors under `--json`" above — no second
+error shape was invented. Outcomes (`9`/`10`) print the shapes above to
+stdout and return the code — see "Two classes of non-zero exit code".
+
+### Allowlist projection, same rule as `devices list`
+
+`src/plug.ts` builds its output by naming each field it exposes — `pid`/
+`value` out of `get_property_list`'s response — never by spreading the raw
+API object. The repo is public and reverse-engineered responses routinely
+carry tokens/account identifiers per the finding; an unexpected wrapper key
+in a `get_property_list` response is parsed defensively (see "Device
+state" above) and never printed wholesale.
+
+### The fake fixture can express ONLINE, OFFLINE, and UNKNOWN
+
+`src/transport-fake.ts`'s `fakeGetObjectListEnvelope()` originally (WYZR-6)
+had no `conn_state` field at all, so every device it produced projected as
+`state: "unknown"` — correct behavior (the projection never guesses), but
+it meant this repo's own happy-path fixture could never exercise the
+online/offline distinction this story depends on getting right. It now
+takes an array of per-device overrides (`FakeDeviceListEntry`), with
+`FAKE_PLUG_ONLINE`/`FAKE_PLUG_OFFLINE`/`FAKE_PLUG_STATE_UNKNOWN` presets;
+`fakePropertyListEnvelope(props)` and `fakeSetPropertyEnvelope()` are new,
+equally synthetic, siblings for `get_property_list`/`set_property`. Every
+one of these remains SYNTHETIC — constructed from the finding's
+description of the shape, never a capture of real Wyze traffic.
+
+### This command has never been exercised against a real Wyze account or device
+
+`plug status`, `plug on`, and `plug off` — the P3/P5 decode rules, the
+`get_property_list`/`set_property` request and response shapes, and the
+device-resolution logic layered on `devices list`'s own unverified field
+names — are, like everything else in this repo, unverified against
+reality. A green suite here proves this code matches this project's own
+belief about the Wyze API's shape; it **cannot** prove that belief is
+correct. Proving it would require a provisioned Wyze account with a real
+plug and a single live run of all three verbs, which would close: whether
+`P3`/`P5` really are present and int-encoded on this account's actual
+hardware/firmware generation (finding §Q4's own open "WHAT IS P7?"
+caveat), the real `get_property_list`/`set_property` request and response
+field names (finding's explicit unknown #1), and whether a `set_property`
+write is ever reflected fast enough for a single immediate read-back to
+observe it at all (closing decision (D2)'s propagation-lag question in
+the other direction, for the first time). See "Live-device coverage"
+immediately below for the full statement this applies to.
+
 ## Live-device coverage
 
 **Nothing in this repo has ever been exercised against a real Wyze account
@@ -591,28 +888,51 @@ shapes are this author's inference, not a confirmed contract; the token
 lifetimes and refresh behavior are only as documented in the
 finding, at reduced confidence, never observed directly.
 
-**`wyzr devices list` adds no exception to any of this.** Its `mac`/
-`product_model`/`nickname` field names, its `conn_state`
-online/offline-inference field name, and its `KNOWN_PLUG_MODELS` plug-model
-list are this project's own inference (tier (d) at best), never confirmed
-against a real `get_object_list` response — the finding's explicit unknown
-#1 is that no such response has ever been captured in any tier (a)/(b)
-source. Expect, specifically: every device's `state` to read `"unknown"`
-until `conn_state`'s field name is corrected against a live account; a real
-plug with an unrecognized model code to show `isPlug: false` until
+**Neither `wyzr devices list` nor `wyzr plug status|on|off` adds any
+exception to any of this.** `devices list`'s `mac`/`product_model`/
+`nickname` field names, its `conn_state` online/offline-inference field
+name, and its `KNOWN_PLUG_MODELS` plug-model list are this project's own
+inference (tier (d) at best), never confirmed against a real
+`get_object_list` response — the finding's explicit unknown #1 is that no
+such response has ever been captured in any tier (a)/(b) source. Expect,
+specifically: every device's `state` to read `"unknown"` until
+`conn_state`'s field name is corrected against a live account; a real plug
+with an unrecognized model code to show `isPlug: false` until
 `KNOWN_PLUG_MODELS` is corrected; and `mac`/`model` to read `null` if the
 real field names differ from `mac`/`product_model`. None of these are bugs
 in the sense of failing this repo's own test suite — the suite tests this
 code against its own synthetic fixtures, which is exactly the limitation
 this section exists to name.
 
-Every path in this repo — including `wyzr devices list` end to end — is
-exercisable against `FakeWyzeTransport` with no credential present at all —
-that is the design, not a limitation — but a green suite here proves this
-code matches this repo's own belief about the Wyze API, and **cannot** tell
-you that belief is wrong. A green CI badge reflects the scaffold and this
-story's logic (typecheck/lint/test/coverage/no-direct-console), not hardware
-or live-API coverage. Later stories that add real device interaction are
+**`plug status`, `plug on`, and `plug off` carry the same unverified
+status, one layer further in.** `src/plug.ts`'s `get_property_list`/
+`set_property` request field names (`target_pid_list`, `mac`, `model`,
+`pid`, `value`) and its assumed response shape (`data.property_list` as a
+list of `{pid, value}` entries) are this project's own inference by
+analogy with `get_object_list`'s own `device_list` wrapper — never
+confirmed against a real response, because none exists in any tier (a)/(b)
+source (finding's explicit unknown #1, again). `P3`/`P5` themselves are
+tier (b) — read from the actively-maintained `wyze-sdk`'s own source — but
+whether THIS project's specific plug hardware/firmware exposes exactly
+that PID set is unverified (finding §Q4's own open "WHAT IS P7?" caveat on
+its reference source). And decision (D2)'s propagation-lag question — does
+a real `set_property` write show up in an immediate read-back, or does it
+take measurable time to propagate — is **unverified in both directions**:
+this repo has never observed either a real confirmation or a real
+contradiction. A provisioned account with a real plug, and a single live
+run of all three verbs, would close: whether the request/response field
+names above are right, whether this hardware's PID set matches, and
+whether one immediate read-back is fast enough to typically observe a
+write at all.
+
+Every path in this repo — including `wyzr devices list` and
+`wyzr plug status|on|off` end to end — is exercisable against
+`FakeWyzeTransport` with no credential present at all — that is the
+design, not a limitation — but a green suite here proves this code matches
+this repo's own belief about the Wyze API, and **cannot** tell you that
+belief is wrong. A green CI badge reflects the scaffold and this story's
+logic (typecheck/lint/test/coverage/no-direct-console), not hardware or
+live-API coverage. Later stories that add real device interaction are
 expected to update this section — a green badge must never be read as
 implying hardware or a real account has been touched until it says so here
 explicitly.

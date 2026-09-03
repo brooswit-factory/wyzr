@@ -16,6 +16,9 @@ export const ExitCode = {
   Network: 5,
   ApiError: 6,
   MfaRequired: 7,
+  AmbiguousDevice: 8,
+  StateUnknown: 9,
+  WriteContradicted: 10,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -33,6 +36,9 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.Network]: "network",
   [ExitCode.ApiError]: "api_error",
   [ExitCode.MfaRequired]: "mfa_required",
+  [ExitCode.AmbiguousDevice]: "ambiguous_device",
+  [ExitCode.StateUnknown]: "state_unknown",
+  [ExitCode.WriteContradicted]: "write_contradicted",
 };
 
 export class CliError extends Error {

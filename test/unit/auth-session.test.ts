@@ -308,6 +308,75 @@ describe("WyzeAuthSession — getObjectList and token refresh", () => {
   });
 });
 
+// WYZR-13's additions: getPropertyList/setProperty go through the exact
+// same callAuthenticated() plumbing as getObjectList above — these prove
+// that inheritance, plus that they pass mac/model/targetPids/pid/value
+// through untouched.
+describe("WyzeAuthSession — getPropertyList and setProperty (WYZR-13)", () => {
+  test("getPropertyList passes mac/model/targetPids through to the transport", async () => {
+    let seenReq: { mac: string; model: string; targetPids: string[] } | undefined;
+    const transport = new FakeWyzeTransport({
+      getPropertyListHandler: (req) => {
+        seenReq = req;
+        return { code: "1", msg: "", data: { property_list: [{ pid: "P3", value: 1 }] } };
+      },
+    });
+    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
+    await session.login();
+
+    await session.getPropertyList("MAC0", "WLPP1", ["P3", "P5"]);
+
+    expect(seenReq).toMatchObject({ mac: "MAC0", model: "WLPP1", targetPids: ["P3", "P5"] });
+  });
+
+  test("setProperty passes mac/model/pid/value through to the transport, value never coerced to boolean", async () => {
+    let seenReq: { mac: string; model: string; pid: string; value: 0 | 1 } | undefined;
+    const transport = new FakeWyzeTransport({
+      setPropertyHandler: (req) => {
+        seenReq = req;
+        return { code: "1", msg: "", data: {} };
+      },
+    });
+    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
+    await session.login();
+
+    await session.setProperty("MAC0", "WLPP1", "P3", 0);
+
+    expect(seenReq).toMatchObject({ mac: "MAC0", model: "WLPP1", pid: "P3", value: 0 });
+    expect(seenReq!.value).not.toBe(false);
+  });
+
+  test("getPropertyList refreshes and retries exactly once on an expired access token", async () => {
+    let calls = 0;
+    const transport = new FakeWyzeTransport({
+      getPropertyListHandler: (): WyzeEnvelope => {
+        calls += 1;
+        return calls === 1
+          ? fakeAccessTokenExpiredEnvelope()
+          : { code: "1", msg: "", data: { property_list: [{ pid: "P3", value: 1 }] } };
+      },
+      refreshTokenHandler: () => fakeSuccessEnvelope({ accessToken: "refreshed-at-000" }),
+    });
+    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
+    await session.login();
+
+    const data = (await session.getPropertyList("MAC0", "WLPP1", ["P3"])) as {
+      property_list: Array<{ pid: string }>;
+    };
+
+    expect(calls).toBe(2);
+    expect(data.property_list[0]!.pid).toBe("P3");
+  });
+
+  test("setProperty refuses an authenticated call before login()", async () => {
+    const transport = new FakeWyzeTransport();
+    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
+
+    const err = await expectCliError(session.setProperty("MAC0", "WLPP1", "P3", 1));
+    expect(err.reason).toBe("wyze_not_authenticated");
+  });
+});
+
 // The specific red-first test the ticket requires: run once with the
 // registration removed to see it actually fail, restore, then trust it
 // green. See the PR body for the exact red output observed when
