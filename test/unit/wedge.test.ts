@@ -1,0 +1,351 @@
+import { describe, expect, test } from "bun:test";
+import {
+  evaluateWedge,
+  WedgeVerdict,
+  type ControlPlaneReading,
+  type DirectPathObservation,
+  type InstrumentObservation,
+  type LocalConnectivityObservation,
+  type WedgeInput,
+} from "../../src/wedge.ts";
+
+const NOW = 1_800_000_000_000; // fixed epoch ms — the engine takes `now` as input, never reads a real clock.
+const TEN_MIN = 10 * 60 * 1000;
+
+function instrument(overrides: Partial<InstrumentObservation> = {}): InstrumentObservation {
+  return {
+    __brand: "wedge-instrument",
+    name: "test-instrument",
+    dependsOn: [],
+    quietThresholdMs: TEN_MIN,
+    outcome: "observed",
+    lastSeenAt: NOW - TEN_MIN - 1,
+    note: null,
+    ...overrides,
+  };
+}
+
+function directPath(overrides: Partial<DirectPathObservation> = {}): DirectPathObservation {
+  return { __brand: "wedge-direct-path", name: "test-path", outcome: "dead", note: null, ...overrides };
+}
+
+function localControl(overrides: Partial<LocalConnectivityObservation> = {}): LocalConnectivityObservation {
+  return {
+    __brand: "wedge-local-control",
+    name: "local-connectivity",
+    outcome: "healthy",
+    confirms: ["manager-internet"],
+    note: null,
+    ...overrides,
+  };
+}
+
+function controlPlane(overrides: Partial<ControlPlaneReading> = {}): ControlPlaneReading {
+  return { __brand: "wedge-control-plane", name: "tailscale", online: true, note: null, ...overrides };
+}
+
+/** A fully-wired PROVEN case: two instruments sharing "manager-internet",
+ * silent well past their thresholds, the control confirming that
+ * dependency healthy, and one dead direct path. Individual tests mutate
+ * this baseline to explore every other branch. */
+function provenInput(overrides: Partial<WedgeInput> = {}): WedgeInput {
+  return {
+    now: NOW,
+    instruments: [
+      instrument({ name: "jira", dependsOn: ["manager-internet"] }),
+      instrument({ name: "github", dependsOn: ["manager-internet"] }),
+    ],
+    directPaths: [directPath({ name: "ssh" })],
+    localControl: localControl(),
+    controlPlane: [],
+    ...overrides,
+  };
+}
+
+describe("evaluateWedge — PROVEN", () => {
+  test("two independently-silent instruments, control healthy, direct path dead: PROVEN", () => {
+    const result = evaluateWedge(provenInput());
+    expect(result.verdict).toBe(WedgeVerdict.Proven);
+  });
+
+  test("instruments with NO shared dependency are independent even without a healthy control", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["jira-cloud"] }),
+          instrument({ name: "github", dependsOn: ["github-cloud"] }),
+        ],
+        localControl: localControl({ outcome: "error", confirms: [] }),
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.Proven);
+  });
+
+  test("multiple direct paths must ALL be dead", () => {
+    const result = evaluateWedge(
+      provenInput({ directPaths: [directPath({ name: "ssh" }), directPath({ name: "tunnel-ping" })] }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.Proven);
+  });
+});
+
+describe("evaluateWedge — a fully healthy box is REFUSED", () => {
+  test("both instruments active (not silent): NOT_PROVEN", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["manager-internet"], lastSeenAt: NOW - 1000 }),
+          instrument({ name: "github", dependsOn: ["manager-internet"], lastSeenAt: NOW - 1000 }),
+        ],
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes("only 0 instrument(s) observed silent"))).toBe(true);
+  });
+});
+
+describe("evaluateWedge — one instrument silent, the other live, is REFUSED", () => {
+  test("only one silent instrument: NOT_PROVEN, never PROVEN", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["manager-internet"] }),
+          instrument({ name: "github", dependsOn: ["manager-internet"], lastSeenAt: NOW - 1000 }),
+        ],
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes("only 1 instrument(s) observed silent"))).toBe(true);
+  });
+});
+
+describe("evaluateWedge — both silent, local-connectivity control FAILING: INCONCLUSIVE, never healthy and never proven", () => {
+  for (const failing of ["unhealthy", "error", "timeout", "unconfigured"] as const) {
+    test(`control outcome "${failing}" with a shared, unconfirmed dependency: INCONCLUSIVE_BY_SHARED_CAUSE`, () => {
+      const result = evaluateWedge(provenInput({ localControl: localControl({ outcome: failing, confirms: [] }) }));
+      expect(result.verdict).toBe(WedgeVerdict.InconclusiveBySharedCause);
+      expect(result.verdict).not.toBe(WedgeVerdict.NotProven);
+      expect(result.verdict).not.toBe(WedgeVerdict.Proven);
+    });
+  }
+});
+
+describe("evaluateWedge — both silent, control healthy, but a direct path still ALIVE is REFUSED", () => {
+  test("one alive direct path blocks PROVEN even with everything else satisfied", () => {
+    const result = evaluateWedge(provenInput({ directPaths: [directPath({ name: "ssh", outcome: "alive" })] }));
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes('direct path "ssh" is "alive", not confirmed dead'))).toBe(true);
+  });
+
+  test("an unconfirmed direct path also blocks PROVEN — absence of evidence is never evidence of dead", () => {
+    const result = evaluateWedge(provenInput({ directPaths: [directPath({ name: "ssh", outcome: "unconfirmed" })] }));
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
+
+  test("no direct paths supplied at all blocks PROVEN", () => {
+    const result = evaluateWedge(provenInput({ directPaths: [] }));
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes("no direct paths were supplied"))).toBe(true);
+  });
+
+  test("one dead path and one alive path among several: still REFUSED", () => {
+    const result = evaluateWedge(
+      provenInput({
+        directPaths: [directPath({ name: "ssh", outcome: "dead" }), directPath({ name: "tunnel-ping", outcome: "alive" })],
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
+});
+
+describe("evaluateWedge — control-plane liveness is recorded but structurally powerless", () => {
+  test("a green (online: true) control-plane reading CANNOT flip a PROVEN verdict to refused", () => {
+    const result = evaluateWedge(provenInput({ controlPlane: [controlPlane({ online: true })] }));
+    expect(result.verdict).toBe(WedgeVerdict.Proven);
+  });
+
+  test("an offline/unknown control-plane reading also cannot manufacture a PROVEN verdict on its own", () => {
+    // Everything else unsatisfied (no silent instruments) — a bad control-plane reading must not be
+    // read as evidence FOR a wedge either; it is powerless in BOTH directions.
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [instrument({ name: "jira", lastSeenAt: NOW - 1000 }), instrument({ name: "github", lastSeenAt: NOW - 1000 })],
+        controlPlane: [controlPlane({ online: false })],
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
+
+  test("the control-plane reading is still recorded in the evidence trail even though it cannot affect the verdict", () => {
+    const result = evaluateWedge(provenInput({ controlPlane: [controlPlane({ name: "tailscale", online: true })] }));
+    expect(result.controlPlane).toHaveLength(1);
+    expect(result.controlPlane[0]!.online).toBe(true);
+    expect(result.reasons.some((r) => r.includes('control-plane reading "tailscale" recorded as true'))).toBe(true);
+  });
+
+  test("a ControlPlaneReading is not assignable to WedgeInput.instruments — a compile-time property, checked by `bun run typecheck`", () => {
+    const reading = controlPlane();
+    // @ts-expect-error — ControlPlaneReading's shape (and its __brand) is deliberately incompatible
+    // with InstrumentObservation[]; this line existing and needing the suppression IS the proof that
+    // "a control-plane reading can never be counted as one of the two instruments" is structural.
+    const instruments: InstrumentObservation[] = [reading];
+    void instruments;
+  });
+
+  test("a LocalConnectivityObservation is not assignable to WedgeInput.instruments either", () => {
+    const control = localControl();
+    // @ts-expect-error — same structural guarantee as above, for the local-connectivity control.
+    const instruments: InstrumentObservation[] = [control];
+    void instruments;
+  });
+});
+
+describe("evaluateWedge — an instrument that THROWS/TIMES OUT/is UNCONFIGURED never silently vanishes from the quorum", () => {
+  test("dropping a degraded instrument would leave one probe looking like two — assert refusal, not proof", () => {
+    // Three instruments configured; only ONE is genuinely, affirmatively silent. A naive
+    // implementation that simply filtered out non-"observed" readings before counting could, with a
+    // sloppy length check elsewhere, mistake "3 instruments minus 1 bad one = 2" for a quorum. This
+    // input is built so THAT mistake would produce PROVEN; the correct engine must not.
+    for (const outcome of ["error", "timeout", "unconfigured"] as const) {
+      const result = evaluateWedge(
+        provenInput({
+          instruments: [
+            instrument({ name: "jira", dependsOn: ["manager-internet"] }), // genuinely silent
+            instrument({ name: "github", dependsOn: ["manager-internet"], outcome, lastSeenAt: null }), // degraded
+          ],
+        }),
+      );
+      expect(result.verdict).toBe(WedgeVerdict.NotProven);
+      expect(result.reasons.some((r) => r.includes(`instrument "github" could not be read (${outcome})`))).toBe(true);
+    }
+  });
+
+  test("an unconfigured instrument's own note explains why it was excluded, not just that it was", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira" }),
+          instrument({ name: "github", outcome: "unconfigured", lastSeenAt: null, note: "no baseUrl supplied" }),
+        ],
+      }),
+    );
+    const github = result.instruments.find((i) => i.name === "github")!;
+    expect(github.isSilent).toBe(false);
+    expect(github.outcome).toBe("unconfigured");
+  });
+});
+
+describe("evaluateWedge — two instruments sharing a declared dependency do not satisfy rule 1 on their own", () => {
+  test("shared dependency, no local control at all configured in this input's control outcome: NOT independent", () => {
+    const result = evaluateWedge(provenInput({ localControl: localControl({ outcome: "unhealthy", confirms: [] }) }));
+    // Both silent, shared dependency unconfirmed => INCONCLUSIVE (control failing), not a silent PROVEN.
+    expect(result.verdict).toBe(WedgeVerdict.InconclusiveBySharedCause);
+  });
+
+  test("shared dependency, control healthy but confirms a DIFFERENT dependency: still not independent", () => {
+    const result = evaluateWedge(
+      provenInput({ localControl: localControl({ outcome: "healthy", confirms: ["some-other-dependency"] }) }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes("no pair of silent instruments is independent"))).toBe(true);
+  });
+
+  test("computed independence pairs report which dependency was shared, for the evidence trail", () => {
+    const result = evaluateWedge(
+      provenInput({ localControl: localControl({ outcome: "healthy", confirms: ["some-other-dependency"] }) }),
+    );
+    expect(result.independencePairs).toHaveLength(1);
+    expect(result.independencePairs[0]!.independent).toBe(false);
+    expect(result.independencePairs[0]!.sharedDependencies).toEqual(["manager-internet"]);
+  });
+});
+
+describe("evaluateWedge — the quiet threshold is a boundary, pinned exactly (item 11: `now` is injected, never an ambient clock)", () => {
+  test("quiet for exactly 1ms less than the threshold: NOT silent", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["manager-internet"], lastSeenAt: NOW - (TEN_MIN - 1) }),
+          instrument({ name: "github", dependsOn: ["manager-internet"] }),
+        ],
+      }),
+    );
+    const jira = result.instruments.find((i) => i.name === "jira")!;
+    expect(jira.quietForMs).toBe(TEN_MIN - 1);
+    expect(jira.isSilent).toBe(false);
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
+
+  test("quiet for EXACTLY the threshold: silent (inclusive boundary)", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["manager-internet"], lastSeenAt: NOW - TEN_MIN }),
+          instrument({ name: "github", dependsOn: ["manager-internet"], lastSeenAt: NOW - TEN_MIN }),
+        ],
+      }),
+    );
+    for (const i of result.instruments) {
+      expect(i.quietForMs).toBe(TEN_MIN);
+      expect(i.isSilent).toBe(true);
+    }
+    expect(result.verdict).toBe(WedgeVerdict.Proven);
+  });
+
+  test("quiet for exactly 1ms more than the threshold: silent", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["manager-internet"], lastSeenAt: NOW - (TEN_MIN + 1) }),
+          instrument({ name: "github", dependsOn: ["manager-internet"], lastSeenAt: NOW - (TEN_MIN + 1) }),
+        ],
+      }),
+    );
+    for (const i of result.instruments) {
+      expect(i.quietForMs).toBe(TEN_MIN + 1);
+      expect(i.isSilent).toBe(true);
+    }
+    expect(result.verdict).toBe(WedgeVerdict.Proven);
+  });
+});
+
+describe("evaluateWedge — unconfigured never counts toward a quorum", () => {
+  test("both instruments unconfigured (the normal state before WYZR-20 ships): NOT_PROVEN, never crashes", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", outcome: "unconfigured", lastSeenAt: null }),
+          instrument({ name: "github", outcome: "unconfigured", lastSeenAt: null }),
+        ],
+        directPaths: [],
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
+
+  test("no instruments supplied at all: NOT_PROVEN, never crashes", () => {
+    const result = evaluateWedge(provenInput({ instruments: [] }));
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
+});
+
+describe("evaluateWedge — reasons form a legible evidence trail, not just a bare verdict", () => {
+  test("PROVEN's reasons name the independent pair and confirm every direct path", () => {
+    const result = evaluateWedge(provenInput());
+    expect(result.reasons.some((r) => r.includes("independent silent pair found"))).toBe(true);
+    expect(result.reasons.some((r) => r.includes("direct path(s) confirmed dead"))).toBe(true);
+    expect(result.reasons[result.reasons.length - 1]).toContain("PROVEN");
+  });
+
+  test("an active (not-yet-silent) instrument's reason names its quiet duration and threshold", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", lastSeenAt: NOW - 1000 }),
+          instrument({ name: "github", lastSeenAt: NOW - 1000 }),
+        ],
+      }),
+    );
+    expect(result.reasons.some((r) => r.includes('instrument "jira" is active') && r.includes("threshold"))).toBe(true);
+  });
+});

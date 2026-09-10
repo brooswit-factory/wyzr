@@ -19,6 +19,24 @@ export const ExitCode = {
   AmbiguousDevice: 8,
   StateUnknown: 9,
   WriteContradicted: 10,
+  /** `wyzr wedge status` (WYZR-17): the engine's verdict was NOT_PROVEN —
+   * see src/wedge.ts. An OUTCOME code, not an error code, same class as 9/10
+   * above: the command succeeded at running every probe and is reporting
+   * exactly what it observed, printing its normal `--json` payload to
+   * stdout. This is also this repo's default/refuse-by-default reading: a
+   * healthy box, a single silent instrument, an unruled-out shared cause
+   * that never got the chance to matter, or a live direct path all land
+   * here — see src/cli-wedge.ts's wedgeVerdictExitCode(). */
+  WedgeNotProven: 11,
+  /** `wyzr wedge status` only: the verdict was INCONCLUSIVE_BY_SHARED_CAUSE
+   * — the local-connectivity control itself could not be read, so the
+   * shared-cause exclusion (README's "independence trap") could not run,
+   * and nothing can be concluded about the suspect box either way. Also an
+   * OUTCOME code — "I could not look" is a successful observation, not a
+   * failure to run. Deliberately its OWN code, distinct from
+   * WedgeNotProven, so a script can tell "not wedged" from "could not
+   * look" without parsing prose. */
+  WedgeInconclusiveBySharedCause: 12,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -39,6 +57,8 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.AmbiguousDevice]: "ambiguous_device",
   [ExitCode.StateUnknown]: "state_unknown",
   [ExitCode.WriteContradicted]: "write_contradicted",
+  [ExitCode.WedgeNotProven]: "wedge_not_proven",
+  [ExitCode.WedgeInconclusiveBySharedCause]: "wedge_inconclusive_by_shared_cause",
 };
 
 export class CliError extends Error {
