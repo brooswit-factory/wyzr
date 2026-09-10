@@ -85,6 +85,12 @@ describe("runWedgeStatus — never throws for a non-PROVEN verdict (OUTCOME code
     const probes = new FakeWedgeProbes({
       jiraHandler: async () => ({ outcome: "observed", lastSeenAt: NOW - 200_000, note: null }),
       gitHubHandler: async () => ({ outcome: "observed", lastSeenAt: NOW - 200_000, note: null }),
+      // Explicitly dead, not the FakeWedgeProbes default of "alive" (WYZR-23:
+      // an affirmatively alive direct path now outranks a failing control
+      // and forces NOT_PROVEN — this test wants the OTHER case, where no
+      // direct path answered, so the control failure alone is inconclusive.
+      sshHandler: async () => fakeDirectPathDead(),
+      tunnelPingHandler: async () => fakeDirectPathDead(),
       localConnectivityHandler: async () => fakeLocalControlUnhealthy(),
     });
     const code = await runWedgeStatus(deps(provenConfig(), probes), false, NOW);

@@ -82,6 +82,25 @@
 //    healthy is a precondition of PROVEN regardless of whether the silent
 //    instruments' dependency sets happen to overlap, not a check that only
 //    matters when they do.
+// 6. An affirmatively "alive" direct path OUTRANKS the control precondition
+//    above (WYZR-23). Point 5's argument — a broken local connection makes
+//    every instrument go quiet for a reason unrelated to the suspect box —
+//    is airtight for SILENCE; it says nothing about an affirmative answer,
+//    because a broken local connection can suppress a reply but cannot
+//    manufacture one. So when a direct path reads "alive", the shared-cause
+//    exclusion has already been beaten: something on the far end answered,
+//    which is direct, unconfounded evidence about the suspect box, strictly
+//    better than anything the control could have told us. `evaluateWedge()`
+//    checks for an "alive" direct path BEFORE the point-5 healthy-control
+//    check can return INCONCLUSIVE_BY_SHARED_CAUSE, and returns NOT_PROVEN
+//    instead — never INCONCLUSIVE, because "nothing can be concluded" would
+//    then be a false statement about our own epistemic position. Scoped
+//    narrowly: only "alive" qualifies — "dead" and "unconfirmed" say
+//    nothing positive about the box, so point 5 still governs those cases
+//    entirely, unchanged. And every verdict whose input contains an
+//    "alive" direct path names it in `reasons`, emitted before any verdict
+//    returns, so no early exit (including this one) can drop it from the
+//    trail a human actually reads.
 
 export const WedgeVerdict = {
   Proven: "PROVEN",
@@ -333,6 +352,17 @@ export function evaluateWedge(input: WedgeInput): WedgeResult {
     );
   }
 
+  // Named in `reasons` unconditionally, before any verdict below can
+  // return — see this module's top comment, point 6. Whichever verdict is
+  // ultimately reached, a human reading the trail must see that a direct
+  // path answered; no early exit gets to drop this line.
+  const aliveDirectPaths = input.directPaths.filter((p) => p.outcome === "alive");
+  for (const p of aliveDirectPaths) {
+    reasons.push(
+      `direct path "${p.name}" read "alive" — direct, unconfounded evidence the suspect box is reachable (a broken local connection can suppress a reply, never manufacture one)`,
+    );
+  }
+
   const base = {
     instruments,
     directPaths: input.directPaths,
@@ -343,6 +373,25 @@ export function evaluateWedge(input: WedgeInput): WedgeResult {
   if (silent.length < 2) {
     reasons.push(
       `only ${silent.length} instrument(s) observed silent — at least 2 independently-silent instruments are required, never fewer`,
+    );
+    return { verdict: WedgeVerdict.NotProven, reasons, ...base, independentPairFound: null, independencePairs: [] };
+  }
+
+  // ALIVE OUTRANKS THE CONTROL PRECONDITION (WYZR-23, this module's top
+  // comment point 6), checked BEFORE the INCONCLUSIVE_BY_SHARED_CAUSE
+  // return just below so it can never be shadowed by it. Only fires when
+  // the control precondition would otherwise apply (i.e. the control was
+  // NOT read as healthy) — when the control IS healthy, the ordinary
+  // independence/direct-path checks further down already handle an alive
+  // path correctly (and already did, before this task). Only "alive"
+  // qualifies; "dead" and "unconfirmed" fall through to the unchanged
+  // WYZR-22 precondition below.
+  if (input.localControl.outcome !== "healthy" && aliveDirectPaths.length > 0) {
+    reasons.push(
+      `>=2 instruments are silent and the local-connectivity control is "${input.localControl.outcome}", not ` +
+        "healthy — but an affirmatively \"alive\" direct path is direct, positive evidence about the suspect box " +
+        "that a broken local connection cannot manufacture, so this forces NOT_PROVEN rather than " +
+        "INCONCLUSIVE_BY_SHARED_CAUSE, which would falsely claim nothing can be concluded",
     );
     return { verdict: WedgeVerdict.NotProven, reasons, ...base, independentPairFound: null, independencePairs: [] };
   }
@@ -358,6 +407,8 @@ export function evaluateWedge(input: WedgeInput): WedgeResult {
   // erroring, timed-out, or unconfigured control means the shared cause was
   // never ruled out, so this can never be scored as independent evidence —
   // it is INCONCLUSIVE_BY_SHARED_CAUSE, "I could not look," never PROVEN.
+  // (Unless an alive direct path already returned above — see immediately
+  // above this comment.)
   if (input.localControl.outcome !== "healthy") {
     reasons.push(
       `>=2 instruments are silent, but the local-connectivity control is "${input.localControl.outcome}", not ` +

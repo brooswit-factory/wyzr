@@ -130,6 +130,81 @@ describe("evaluateWedge — both silent, local-connectivity control FAILING: INC
   }
 });
 
+describe("evaluateWedge — WYZR-23: an affirmatively ALIVE direct path outranks a failing control", () => {
+  // The ticket's exact repro: two silent instruments, a non-healthy control,
+  // ssh "alive". Before this fix this returned INCONCLUSIVE_BY_SHARED_CAUSE
+  // with no mention of ssh anywhere in `reasons` — confirmed live against
+  // the pre-fix code before this change was made (see the PR description).
+  for (const failing of ["unhealthy", "error", "timeout", "unconfigured"] as const) {
+    test(`control outcome "${failing}" with ssh "alive": NOT_PROVEN, never INCONCLUSIVE, and ssh is named`, () => {
+      const result = evaluateWedge(
+        provenInput({
+          directPaths: [directPath({ name: "ssh", outcome: "alive" })],
+          localControl: localControl({ outcome: failing, confirms: [] }),
+        }),
+      );
+      expect(result.verdict).toBe(WedgeVerdict.NotProven);
+      expect(result.verdict).not.toBe(WedgeVerdict.InconclusiveBySharedCause);
+      expect(result.reasons.some((r) => r.includes('direct path "ssh" read "alive"'))).toBe(true);
+      expect(result.reasons.some((r) => r.includes("forces NOT_PROVEN rather than INCONCLUSIVE_BY_SHARED_CAUSE"))).toBe(
+        true,
+      );
+    });
+  }
+
+  // Scoped narrowly (the ticket's own words: "do not widen it"): only
+  // "alive" short-circuits. "dead" and "unconfirmed" say nothing positive
+  // about the box, so WYZR-22's control precondition still governs them
+  // entirely — this must still be INCONCLUSIVE_BY_SHARED_CAUSE, unchanged.
+  for (const notAlive of ["dead", "unconfirmed"] as const) {
+    test(`control failing, ssh "${notAlive}" (not alive): still INCONCLUSIVE_BY_SHARED_CAUSE — WYZR-22 untouched`, () => {
+      const result = evaluateWedge(
+        provenInput({
+          directPaths: [directPath({ name: "ssh", outcome: notAlive })],
+          localControl: localControl({ outcome: "error", confirms: [] }),
+        }),
+      );
+      expect(result.verdict).toBe(WedgeVerdict.InconclusiveBySharedCause);
+      expect(result.reasons.some((r) => r.includes('read "alive"'))).toBe(false);
+    });
+  }
+
+  test("< 2 silent instruments with a failing control and ssh alive is still NOT_PROVEN (unchanged), and still names ssh as alive", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "jira", dependsOn: ["manager-internet"] }),
+          instrument({ name: "github", dependsOn: ["manager-internet"], lastSeenAt: NOW - 1000 }),
+        ],
+        directPaths: [directPath({ name: "ssh", outcome: "alive" })],
+        localControl: localControl({ outcome: "error", confirms: [] }),
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes('direct path "ssh" read "alive"'))).toBe(true);
+  });
+
+  test("the alive short-circuit does not fire when the control IS healthy — the ordinary direct-path check already handles it, unchanged", () => {
+    const result = evaluateWedge(provenInput({ directPaths: [directPath({ name: "ssh", outcome: "alive" })] }));
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+    expect(result.reasons.some((r) => r.includes('direct path "ssh" read "alive"'))).toBe(true);
+    expect(result.reasons.some((r) => r.includes('direct path "ssh" is "alive", not confirmed dead'))).toBe(true);
+    expect(result.reasons.some((r) => r.includes("forces NOT_PROVEN rather than INCONCLUSIVE_BY_SHARED_CAUSE"))).toBe(
+      false,
+    );
+  });
+
+  test("no widening: an alive direct path can never newly reach PROVEN — PROVEN still requires every direct path confirmed dead", () => {
+    const result = evaluateWedge(
+      provenInput({
+        directPaths: [directPath({ name: "ssh", outcome: "alive" })],
+        localControl: localControl({ outcome: "healthy", confirms: ["manager-internet"] }),
+      }),
+    );
+    expect(result.verdict).not.toBe(WedgeVerdict.Proven);
+  });
+});
+
 describe("evaluateWedge — WYZR-22: the local-connectivity control is a PRECONDITION of PROVEN, not a shared-dependency tiebreaker", () => {
   // The reviewer's exact repro (WYZR-22): two silent instruments with
   // DISJOINT declared dependencies — the exact shape that used to take
