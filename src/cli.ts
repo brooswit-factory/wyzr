@@ -16,6 +16,7 @@
 
 import { runDevicesList } from "./cli-devices.ts";
 import { runPlugStatus, runPlugWrite } from "./cli-plug.ts";
+import { defaultWedgeStatusDeps, runWedgeStatus, type WedgeStatusDeps } from "./cli-wedge.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
 import { printError, printHuman, printJsonError } from "./output.ts";
@@ -143,12 +144,31 @@ export async function dispatchPlug(
   return runPlugWrite({ transport, credentials }, device, sub, json);
 }
 
+/** `wedge`'s own subcommand routing: only `status` exists, and it is
+ * READ-ONLY — see src/cli-wedge.ts's own top comment for why there is no
+ * import path from it to a write verb at all, structurally, not by
+ * convention. */
+export async function dispatchWedge(
+  rest: string[],
+  json: boolean,
+  deps: WedgeStatusDeps = defaultWedgeStatusDeps,
+): Promise<number> {
+  const [sub] = rest;
+  if (sub !== "status") {
+    throw new CliError(sub ? `Unknown wedge subcommand: ${sub}` : "Usage: wyzr wedge status [--json]", ExitCode.Usage);
+  }
+  return runWedgeStatus(deps, json);
+}
+
 const defaultDispatch: Dispatch = async (command, rest, opts) => {
   if (command === "devices") {
     return dispatchDevices(rest, opts.json);
   }
   if (command === "plug") {
     return dispatchPlug(rest, opts.json);
+  }
+  if (command === "wedge") {
+    return dispatchWedge(rest, opts.json);
   }
   throw new CliError(`Unknown command: ${command}`, ExitCode.Usage);
 };
@@ -170,7 +190,8 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "  devices list           List the account's devices.\n" +
         "  plug status <device>   Report whether a plug is on/off, and reachable.\n" +
         "  plug on <device>       Turn a plug on (read back to confirm).\n" +
-        "  plug off <device>      Turn a plug off (read back to confirm).",
+        "  plug off <device>      Turn a plug off (read back to confirm).\n" +
+        "  wedge status           Report the wedge-proof engine's full evidence trail and verdict (read-only).",
     );
     return ExitCode.Ok;
   }

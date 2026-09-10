@@ -6,6 +6,61 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- The wedge-proof engine and `wyzr wedge status` (WYZR-17) — decides
+  whether the destructive power-cycle verb (a later story, `wyzr cycle`)
+  is ever allowed to run, plus a read-only command that shows the
+  engine's full reasoning. **Ships no plug-switching capability at all —
+  no import path exists from any file here to a write verb.**
+  - `src/wedge.ts`: the pure, injectable-boundary engine —
+    `evaluateWedge()` takes already-gathered observations and produces a
+    `WedgeVerdict` (`PROVEN`/`NOT_PROVEN`/`INCONCLUSIVE_BY_SHARED_CAUSE`)
+    plus its full evidence trail. Independence between two silent
+    instruments is a real computation over each one's declared
+    `dependsOn` set, never a hardcoded probe count — a shared,
+    unconfirmed dependency never satisfies it on its own. The clock
+    (`now`) is an injected input; the engine reads no ambient time
+    source anywhere. `ControlPlaneReading`/`LocalConnectivityObservation`
+    are distinct, `__brand`-tagged types from `InstrumentObservation` —
+    structurally inadmissible to the instruments collection the
+    quorum/independence computation reads (proved by a
+    `@ts-expect-error` line `bun run typecheck` fails without), and the
+    engine never branches on a control-plane reading before a verdict is
+    already decided, so a green control-plane signal cannot flip a
+    verdict in either direction.
+  - `src/wedge-probes.ts`/`wedge-probes-real.ts`/`wedge-probes-fake.ts`:
+    the injectable probe boundary (Jira-activity, GitHub-activity, ssh,
+    tunnel ping, the local-connectivity shared-cause control, and the
+    tailscale-style control-plane reading), on the same
+    real/fake-pair pattern as `WyzeTransport`. `classifyDirectPath()`
+    establishes "dead" by TIMING (this probe's own timeout elapsed, or
+    the underlying tool's own connect-timeout was exhausted) rather than
+    by parsing stderr text — a fast response of any kind, success or
+    failure, is `"unconfirmed"`, never `"dead"`.
+  - `src/wedge-runner.ts`: orchestrates a run — every configured probe,
+    concurrently, each under its own enforced timeout; every
+    instrument/direct-path SLOT always appears in the evidence trail,
+    configured or not, so an unconfigured instrument reports itself
+    unconfigured rather than silently disappearing.
+  - `src/wedge-config.ts`: env-var-backed config loading, defaulting
+    every fleet-specific field to unconfigured — no fleet hostname,
+    tunnel name, or credential is hardcoded anywhere. Only the
+    local-connectivity control's target has a default (`1.1.1.1`,
+    Cloudflare's public anycast resolver — no dependency on this
+    project's own fleet infrastructure).
+  - `src/cli-wedge.ts`: `wyzr wedge status`'s human/`--json` rendering.
+    Imports nothing from `cli-plug.ts`/`plug.ts`/`auth-session.ts`/any
+    transport module.
+  - `src/errors.ts`: appended `ExitCode.WedgeNotProven` (11),
+    `ExitCode.WedgeInconclusiveBySharedCause` (12) — OUTCOME codes, not
+    error codes, same class as 9/10: the command succeeded at running
+    every probe and is reporting what it observed.
+  - Jira-activity's request/response shape has never been exercised
+    against a real Jira instance (tier (b), from Atlassian's own public
+    API docs). GitHub's events API shape, ssh/ping timing behavior
+    against an unresolvable vs. a real host, and `tailscale status
+    --json`'s `Self.Online` field were all captured live against this
+    project's own dev sandbox, 2026-09-10 — see README's "wyzr wedge
+    status" section for the exact observations and dates.
 - `wyzr plug status <device>`, `wyzr plug on <device>`, `wyzr plug off
   <device>` (WYZR-13) — the three verbs the product exists to provide.
   - `src/plug.ts`: `P3`/`P5` decoding as a closed, boolean-rejecting
