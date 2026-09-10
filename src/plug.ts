@@ -5,12 +5,21 @@
 // together, because they all share the same P3/P5 decode primitives.
 //
 // docs/wyze-api-findings-2026-09-02.md's explicit unknown #1 (no captured
-// real Wyze response payload exists in any (a)/(b)-tier source) applies here
-// exactly as it does to src/devices.ts's get_object_list projection: the
-// response shape assumed below (`data.property_list` as a list of `{pid,
-// value}` entries) is this project's OWN INFERENCE, by analogy with
-// get_object_list's own `data.device_list` wrapper key — not a confirmed
-// contract. See README's "Live-device coverage" section.
+// real Wyze response payload exists in any (a)/(b)-tier source) applied
+// here exactly as it does to src/devices.ts's get_object_list projection —
+// UNTIL WYZR-15's live-account measurement (RELAYED — see
+// src/transport-http.ts's header comment for what that means) CONFIRMED
+// `data.property_list` as a list of `{pid, value}` entries, this project's
+// own by-analogy guess. Decision (A) is REVISED by that same measurement:
+// `P3`/`P5` values are wire-encoded as STRINGS (`"1"`/`"0"`), not the
+// integers this module previously believed per the community SDK's own
+// type declaration (`PropDef("P3", bool, int, [0, 1])`) — the SDK models
+// its OWN internal Python type that way; it is not what actually crosses
+// the wire. decodeP3()/decodeP5() below already accepted the string form
+// defensively from the start (this repo got lucky, not right, on that
+// specific point) — see their own comments for what changed and what
+// didn't. The WRITE side did not get the same luck: see
+// src/transport.ts's SetPropertyRequest for the wire-level fix.
 
 import { ExitCode } from "./errors.ts";
 
@@ -23,16 +32,18 @@ export type PowerState = "on" | "off" | "unknown";
 export type Reachable = true | false | null;
 
 /**
- * Decision (A): a CLOSED, boolean-rejecting whitelist. Accepts exactly the
- * two wire values the finding documents for `P3` (§Q4: `PropDef("P3", bool,
- * int, [0, 1])` — presented to callers as a bool, wire type int restricted
- * to two values) — the number `1`/`0`, and the string `"1"`/`"0"`
- * (defensive, mirroring src/devices.ts's `classifyState()` precedent).
- * Everything else, INCLUDING a native JSON boolean `true`/`false`, decodes
- * to `"unknown"` — a boolean is precisely the silently-wrong wire assumption
- * the finding warns about, so it is REJECTED, never helpfully coerced. See
- * test/unit/plug.test.ts's boolean-rejection test (ticket requirement: a
- * test that fails if this code ever starts accepting a boolean).
+ * Decision (A), REVISED by WYZR-15: a CLOSED, boolean-rejecting whitelist.
+ * The CONFIRMED wire value (live-account measurement, relayed — see this
+ * module's top comment) is the STRING `"1"`/`"0"`; the number `1`/`0` is
+ * kept accepted too, purely defensively (this module accepted it from the
+ * start, on the strength of the community SDK's own — now known to be
+ * internal-only — int typing, and there is no cost to continuing to
+ * tolerate it on READ). Everything else, INCLUDING a native JSON boolean
+ * `true`/`false`, decodes to `"unknown"` — a boolean is precisely the
+ * silently-wrong wire assumption the finding warns about, so it is
+ * REJECTED, never helpfully coerced. See test/unit/plug.test.ts's
+ * boolean-rejection test (ticket requirement: a test that fails if this
+ * code ever starts accepting a boolean).
  */
 export function decodeP3(value: unknown): PowerState {
   if (value === 1 || value === "1") return "on";
@@ -40,12 +51,13 @@ export function decodeP3(value: unknown): PowerState {
   return "unknown";
 }
 
-/** Same closed whitelist as decodeP3, for `P5` (reachability) — also
- * documented by the finding as int 0/1. `null` (not `"unknown"`) is this
- * module's spelling of "undecodable," mirroring how the existing error
- * contract already uses `null` for "nothing finer to say." Deliberately
- * independent of decodeP3 — reachability must never be inferred from `P3`,
- * per decision (D); see readPlugState() below and its test. */
+/** Same closed whitelist as decodeP3, for `P5` (reachability) — same
+ * WYZR-15 revision applies (confirmed string, number tolerated
+ * defensively). `null` (not `"unknown"`) is this module's spelling of
+ * "undecodable," mirroring how the existing error contract already uses
+ * `null` for "nothing finer to say." Deliberately independent of decodeP3
+ * — reachability must never be inferred from `P3`, per decision (D); see
+ * readPlugState() below and its test. */
 export function decodeP5(value: unknown): Reachable {
   if (value === 1 || value === "1") return true;
   if (value === 0 || value === "0") return false;

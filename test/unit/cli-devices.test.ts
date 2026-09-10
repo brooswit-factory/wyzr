@@ -10,7 +10,8 @@ import type { Credentials } from "../../src/credentials.ts";
 import { DEVICE_LIST_SCHEMA_VERSION } from "../../src/devices.ts";
 import { ExitCode } from "../../src/errors.ts";
 import { registerSecret, resetSecretsForTesting } from "../../src/redact.ts";
-import { FakeWyzeTransport, fakeSuccessEnvelope } from "../../src/transport-fake.ts";
+import { FakeWyzeTransport, fakeAuthSuccessEnvelope } from "../../src/transport-fake.ts";
+import type { WyzeAuthEnvelope } from "../../src/wyze-auth-envelope.ts";
 import type { WyzeEnvelope } from "../../src/wyze-envelope.ts";
 
 afterEach(() => {
@@ -163,7 +164,7 @@ describe("runDevicesList — no secret or unexpected account-identifier field ev
   test("the real session tokens obtained via login() are also never printed", async () => {
     const transport = new FakeWyzeTransport({
       loginHandler: () =>
-        fakeSuccessEnvelope({ accessToken: "session-at-canary-000", refreshToken: "session-rt-canary-000" }),
+        fakeAuthSuccessEnvelope({ accessToken: "session-at-canary-000", refreshToken: "session-rt-canary-000" }),
       getObjectListHandler: () => fakeDeviceListEnvelope(),
     });
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
@@ -180,7 +181,10 @@ describe("runDevicesList — no secret or unexpected account-identifier field ev
 describe("runDevicesList — errors propagate uncaught for src/cli.ts's boundary to map", () => {
   test("a login failure (e.g. invalid credentials) throws rather than being swallowed", async () => {
     const transport = new FakeWyzeTransport({
-      loginHandler: () => ({ code: 1000, msg: "wrong password or apikey", data: {} }),
+      loginHandler: (): WyzeAuthEnvelope => ({
+        httpStatus: 400,
+        raw: { description: "wrong password or apikey", requestId: "fake-request-id-000", errorCode: 1000 },
+      }),
     });
     await expect(runDevicesList({ transport, credentials: FAKE_CREDS }, false)).rejects.toThrow();
   });

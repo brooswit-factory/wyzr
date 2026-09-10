@@ -9,11 +9,14 @@ import { REDACTED, redact, resetSecretsForTesting } from "../../src/redact.ts";
 import {
   FakeWyzeTransport,
   fakeAccessTokenExpiredEnvelope,
+  fakeAuthInvalidCredentialsEnvelope,
+  fakeAuthMfaSmsChallengeEnvelope,
+  fakeAuthMfaTotpChallengeEnvelope,
+  fakeAuthSuccessEnvelope,
   fakeInvalidCredentialsEnvelope,
-  fakeMfaSmsChallengeEnvelope,
-  fakeMfaTotpChallengeEnvelope,
   fakeSuccessEnvelope,
 } from "../../src/transport-fake.ts";
+import type { WyzeAuthEnvelope } from "../../src/wyze-auth-envelope.ts";
 import type { WyzeEnvelope } from "../../src/wyze-envelope.ts";
 
 afterEach(() => {
@@ -61,7 +64,7 @@ describe("WyzeAuthSession.login — success", () => {
     const transport = new FakeWyzeTransport({
       loginHandler: (req) => {
         seenPasswordField = req.passwordHash;
-        return fakeSuccessEnvelope();
+        return fakeAuthSuccessEnvelope();
       },
     });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
@@ -71,24 +74,28 @@ describe("WyzeAuthSession.login — success", () => {
     expect(seenPasswordField).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  test("uses the injected nonce function instead of the wall clock when provided", async () => {
-    let seenNonce = "";
+  // WYZR-15 retired `nonce` entirely (the live-measured login body carries
+  // none) — see src/transport.ts's LoginRequest doc comment. This test
+  // proves the request truly carries no nonce field at all, replacing the
+  // old "injected nonce" test, which no longer has anything to inject.
+  test("sends no nonce field at all — the login request has none", async () => {
+    let seenReq: Record<string, unknown> | undefined;
     const transport = new FakeWyzeTransport({
       loginHandler: (req) => {
-        seenNonce = req.nonce;
-        return fakeSuccessEnvelope();
+        seenReq = req as unknown as Record<string, unknown>;
+        return fakeAuthSuccessEnvelope();
       },
     });
-    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS, nonce: () => "fixed-nonce-000" });
+    const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
     await session.login();
 
-    expect(seenNonce).toBe("fixed-nonce-000");
+    expect(seenReq).not.toHaveProperty("nonce");
   });
 });
 
 describe("WyzeAuthSession.login — the errorCode 1000 trap", () => {
   test("names BOTH wrong-credentials and SSO-only-account possibilities, and points at the fix", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeInvalidCredentialsEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthInvalidCredentialsEnvelope() });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
 
     const err = await expectCliError(session.login());
@@ -105,12 +112,12 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
   test("answers a TOTP challenge automatically when totpSecret is configured, and succeeds", async () => {
     let seenCode = "";
     const transport = new FakeWyzeTransport({
-      loginHandler: () => fakeMfaTotpChallengeEnvelope(),
+      loginHandler: () => fakeAuthMfaTotpChallengeEnvelope(),
       submitMfaHandler: (req) => {
         seenCode = req.verificationCode;
         expect(req.mfaType).toBe("TOTP");
-        expect(req.verificationId).toBe("fake-verification-id-totp-000");
-        return fakeSuccessEnvelope();
+        expect(req.verificationId).toBe("fake-totp-app-id-000");
+        return fakeAuthSuccessEnvelope();
       },
     });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: RFC_BASE32_SECRET };
@@ -123,7 +130,7 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
   });
 
   test("throws a clear MfaRequired error when a TOTP challenge arrives with no totpSecret configured", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaTotpChallengeEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaTotpChallengeEnvelope() });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
 
     const err = await expectCliError(session.login());
@@ -135,7 +142,7 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
   // Covers WYZR-10's carried-forward fix: an empty-string totpSecret must
   // behave identically to no totpSecret at all, not as "configured".
   test("treats an empty-string totpSecret the same as absent", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaTotpChallengeEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaTotpChallengeEnvelope() });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: "" };
     const session = new WyzeAuthSession({ transport, credentials: creds });
 
@@ -144,7 +151,7 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
   });
 
   test("wraps an invalid (non-base32) totpSecret in a clear, actionable error instead of throwing raw", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaTotpChallengeEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaTotpChallengeEnvelope() });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: "not-valid-base32!!" };
     const session = new WyzeAuthSession({ transport, credentials: creds });
 
@@ -160,7 +167,7 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
   // whole registered strings. Reproduces the reviewer's exact scenario: a
   // user who pastes their PASSWORD into totpSecret by mistake.
   test("never echoes any part of an invalid totpSecret, even when it is actually the account password", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaTotpChallengeEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaTotpChallengeEnvelope() });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: FAKE_CREDS.password };
     const session = new WyzeAuthSession({ transport, credentials: creds });
 
@@ -178,8 +185,8 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
 
   test("a wrong TOTP answer surfaces the same errorCode-1000 trap error, not a generic failure", async () => {
     const transport = new FakeWyzeTransport({
-      loginHandler: () => fakeMfaTotpChallengeEnvelope(),
-      submitMfaHandler: () => fakeInvalidCredentialsEnvelope(),
+      loginHandler: () => fakeAuthMfaTotpChallengeEnvelope(),
+      submitMfaHandler: () => fakeAuthInvalidCredentialsEnvelope(),
     });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: RFC_BASE32_SECRET };
     const session = new WyzeAuthSession({ transport, credentials: creds, now: () => 59_000 });
@@ -190,22 +197,23 @@ describe("WyzeAuthSession.login — MFA: TOTP", () => {
 
   test("does not loop: a second MFA challenge after answering one is not retried", async () => {
     const transport = new FakeWyzeTransport({
-      loginHandler: () => fakeMfaTotpChallengeEnvelope(),
+      loginHandler: () => fakeAuthMfaTotpChallengeEnvelope(),
       // Simulate a (synthetic, hypothetical) server that keeps re-challenging.
-      submitMfaHandler: () => fakeMfaTotpChallengeEnvelope(),
+      submitMfaHandler: () => fakeAuthMfaTotpChallengeEnvelope(),
     });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: RFC_BASE32_SECRET };
     const session = new WyzeAuthSession({ transport, credentials: creds, now: () => 59_000 });
 
-    // Should throw (via wyzeGenericApiError, since the second challenge
-    // envelope's `code` is not success/1000) rather than hang or recurse.
+    // Should throw (via wyzeGenericAuthApiError, since the second challenge
+    // envelope has neither a top-level access_token nor an errorCode)
+    // rather than hang or recurse.
     await expectCliError(session.login());
   });
 });
 
 describe("WyzeAuthSession.login — MFA: SMS and unknown types", () => {
   test("throws a clear MfaRequired error for an SMS challenge — never silently ignored", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaSmsChallengeEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaSmsChallengeEnvelope() });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
 
     const err = await expectCliError(session.login());
@@ -215,10 +223,9 @@ describe("WyzeAuthSession.login — MFA: SMS and unknown types", () => {
 
   test("throws a clear MfaRequired error for an unrecognized challenge type", async () => {
     const transport = new FakeWyzeTransport({
-      loginHandler: () => ({
-        code: "90955",
-        msg: "MfaRequired",
-        data: { mfa_options: ["SomeNewChallengeType"], verification_id: "vid-999" },
+      loginHandler: (): WyzeAuthEnvelope => ({
+        httpStatus: 200,
+        raw: { mfa_options: ["SomeNewChallengeType"] },
       }),
     });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
@@ -299,6 +306,18 @@ describe("WyzeAuthSession — getObjectList and token refresh", () => {
     expect(err.reason).toBe("wyze_not_authenticated");
   });
 
+  // Device-host generic-error fallback: neither success, nor an expired
+  // token — callAuthenticated()'s catch-all (wyzeGenericApiError()), a
+  // different code path from the auth-host generic error tested elsewhere.
+  test("a device-host response that is neither success nor token-expired surfaces the generic device API error", async () => {
+    const { session } = await loggedInSession({
+      getObjectListHandler: (): WyzeEnvelope => ({ code: "9999", msg: "something else went wrong", data: {} }),
+    });
+
+    const err = await expectCliError(session.getObjectList());
+    expect(err.reason).toBe("wyze_api_error_9999");
+  });
+
   test("refuses refresh() before any login", async () => {
     const transport = new FakeWyzeTransport();
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
@@ -329,8 +348,8 @@ describe("WyzeAuthSession — getPropertyList and setProperty (WYZR-13)", () => 
     expect(seenReq).toMatchObject({ mac: "MAC0", model: "WLPP1", targetPids: ["P3", "P5"] });
   });
 
-  test("setProperty passes mac/model/pid/value through to the transport, value never coerced to boolean", async () => {
-    let seenReq: { mac: string; model: string; pid: string; value: 0 | 1 } | undefined;
+  test("setProperty passes mac/model/pid/value through to the transport, value never coerced to a number or boolean", async () => {
+    let seenReq: { mac: string; model: string; pid: string; value: "0" | "1" } | undefined;
     const transport = new FakeWyzeTransport({
       setPropertyHandler: (req) => {
         seenReq = req;
@@ -340,9 +359,10 @@ describe("WyzeAuthSession — getPropertyList and setProperty (WYZR-13)", () => 
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
     await session.login();
 
-    await session.setProperty("MAC0", "WLPP1", "P3", 0);
+    await session.setProperty("MAC0", "WLPP1", "P3", "0");
 
-    expect(seenReq).toMatchObject({ mac: "MAC0", model: "WLPP1", pid: "P3", value: 0 });
+    expect(seenReq).toMatchObject({ mac: "MAC0", model: "WLPP1", pid: "P3", value: "0" });
+    expect(seenReq!.value).not.toBe(0);
     expect(seenReq!.value).not.toBe(false);
   });
 
@@ -372,7 +392,7 @@ describe("WyzeAuthSession — getPropertyList and setProperty (WYZR-13)", () => 
     const transport = new FakeWyzeTransport();
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
 
-    const err = await expectCliError(session.setProperty("MAC0", "WLPP1", "P3", 1));
+    const err = await expectCliError(session.setProperty("MAC0", "WLPP1", "P3", "1"));
     expect(err.reason).toBe("wyze_not_authenticated");
   });
 });
@@ -386,7 +406,7 @@ describe("WyzeAuthSession — getPropertyList and setProperty (WYZR-13)", () => 
 describe("WyzeAuthSession — token redaction (run red-first, see PR body)", () => {
   test("the access and refresh tokens from a successful login are redacted from all future output", async () => {
     const transport = new FakeWyzeTransport({
-      loginHandler: () => fakeSuccessEnvelope({ accessToken: "leak-at-canary-000", refreshToken: "leak-rt-canary-000" }),
+      loginHandler: () => fakeAuthSuccessEnvelope({ accessToken: "leak-at-canary-000", refreshToken: "leak-rt-canary-000" }),
     });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
 
@@ -404,7 +424,7 @@ describe("WyzeAuthSession — token redaction (run red-first, see PR body)", () 
     const transport = new FakeWyzeTransport({
       loginHandler: (req) => {
         seenHash = req.passwordHash;
-        return fakeSuccessEnvelope();
+        return fakeAuthSuccessEnvelope();
       },
     });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
@@ -416,8 +436,8 @@ describe("WyzeAuthSession — token redaction (run red-first, see PR body)", () 
 
   test("tokens obtained via the MFA path are also redacted", async () => {
     const transport = new FakeWyzeTransport({
-      loginHandler: () => fakeMfaTotpChallengeEnvelope(),
-      submitMfaHandler: () => fakeSuccessEnvelope({ accessToken: "mfa-leak-at-000", refreshToken: "mfa-leak-rt-000" }),
+      loginHandler: () => fakeAuthMfaTotpChallengeEnvelope(),
+      submitMfaHandler: () => fakeAuthSuccessEnvelope({ accessToken: "mfa-leak-at-000", refreshToken: "mfa-leak-rt-000" }),
     });
     const creds: Credentials = { ...FAKE_CREDS, totpSecret: RFC_BASE32_SECRET };
     const session = new WyzeAuthSession({ transport, credentials: creds, now: () => 59_000 });
@@ -449,8 +469,15 @@ describe("WyzeAuthSession — token redaction (run red-first, see PR body)", () 
 });
 
 describe("WyzeAuthSession — malformed success response", () => {
-  test("throws a clear error instead of storing undefined tokens", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => ({ code: "1", msg: "", data: {} }) });
+  // An auth-host "success" (per isAuthSuccessEnvelope()) is judged solely
+  // by a top-level access_token — so the malformed case is a present
+  // access_token with no refresh_token alongside it, not an empty body
+  // (an empty body isn't a success envelope at all on the auth host; see
+  // src/wyze-auth-envelope.ts).
+  test("throws a clear error instead of storing an undefined refresh token", async () => {
+    const transport = new FakeWyzeTransport({
+      loginHandler: (): WyzeAuthEnvelope => ({ httpStatus: 200, raw: { access_token: "at-only-000" } }),
+    });
     const session = new WyzeAuthSession({ transport, credentials: FAKE_CREDS });
 
     const err = await expectCliError(session.login());
