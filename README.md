@@ -1007,6 +1007,17 @@ blip, not a wedge. **Control-plane liveness never counts as either
 instrument, and can never flip a PROVEN verdict to refused** — see
 "Control-plane: recorded, structurally powerless" below.
 
+**An affirmatively `"alive"` direct path outranks rule 2 above (WYZR-23).**
+Rule 2's justification — a broken local connection makes every instrument
+go quiet for a reason unrelated to the suspect box — is airtight for
+silence; it says nothing about an affirmative answer, because a broken
+local connection can suppress a reply but cannot manufacture one. So when
+a direct path reads `"alive"`, the shared-cause question is already
+answered regardless of what the control says: `evaluateWedge()` returns
+`NOT_PROVEN` — never `INCONCLUSIVE_BY_SHARED_CAUSE`, which would then be a
+false claim that nothing could be concluded. See "Direct paths" below for
+the full rule and its scope.
+
 ### The independence trap
 
 There is no local/LAN control path for Wyze plugs — every operation
@@ -1043,8 +1054,12 @@ or not an instrument's own `dependsOn` happens to say so. So
 ever looks at what any pair of silent instruments declared — whenever two
 or more instruments are silent and the control was not successfully read
 as healthy, the verdict is `INCONCLUSIVE_BY_SHARED_CAUSE` regardless of
-whether their dependency sets overlap. Only once the control is confirmed
-healthy does the declared-dependency computation above run, to decide
+whether their dependency sets overlap, **unless a direct path has already
+read `"alive"` (WYZR-23) — that check runs even earlier, before this one
+can return `INCONCLUSIVE_BY_SHARED_CAUSE`, and forces `NOT_PROVEN` instead;
+see "The proof standard" and "Direct paths" for why.** Only once the
+control is confirmed healthy (or the alive short-circuit has already
+returned) does the declared-dependency computation above run, to decide
 which pairs, if any, count as independent. (A single silent instrument
 never reaches this check at all — see "The proof standard" above: one
 silent probe is a network blip, not a shared-cause question.)
@@ -1110,6 +1125,27 @@ project's own dev sandbox, 2026-09-10: an unresolvable hostname fails via
 budget is nowhere near exhausted by that. Reachability of a well-known
 public host (`1.1.1.1`) was also confirmed live the same day (a normal,
 fast ICMP reply). Neither observation involved any fleet-specific host.
+
+**An affirmatively `"alive"` reading outranks the local-connectivity
+control (WYZR-23).** The control precondition (rule 2 in "The proof
+standard", and "The independence trap" above) exists to explain away
+SILENCE: if the manager machine's own internet is down, every instrument
+goes quiet for a reason that has nothing to do with the suspect box. That
+argument says nothing about an affirmative answer — a broken local
+connection can suppress a reply, but it cannot manufacture one. So if a
+direct path reads `"alive"`, something on the far end answered: direct,
+unconfounded, positive evidence about the suspect box, strictly better
+than anything the control could have told us. `evaluateWedge()` checks for
+an `"alive"` direct path BEFORE it can return `INCONCLUSIVE_BY_SHARED_CAUSE`
+for a non-healthy control, and returns `NOT_PROVEN` instead — reporting
+"I could not look" would be a false statement about our own epistemic
+position once a direct path has already answered. Scoped narrowly: only
+`"alive"` does this. `"dead"` and `"unconfirmed"` say nothing positive
+about the box, so the control precondition still governs those cases
+exactly as WYZR-22 left it, unchanged. And whichever verdict is actually
+reached, `reasons` always names an `"alive"` direct path explicitly — not
+only in this short-circuit — so the single most decision-relevant fact
+available is never absent from the trail a human reads.
 
 **Published for reuse (WYZR-18):** these two probes, and the
 `RealWedgeProbes` class/`WedgeProbes` interface they implement, are meant
