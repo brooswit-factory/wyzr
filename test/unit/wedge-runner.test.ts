@@ -237,4 +237,22 @@ describe("runWedgeCheck — assembly of a full run through the injectable bounda
     expect(result.controlPlane).toHaveLength(1);
     expect(result.controlPlane[0]!.online).toBe("unknown");
   });
+
+  test("a control-plane probe that throws is caught and reported as an unknown reading, never crashes the run", async () => {
+    const probes = new FakeWedgeProbes({
+      controlPlaneHandler: async () => {
+        throw new Error("tailscale ENOENT");
+      },
+    });
+    const config = baseConfig({
+      jira: undefined,
+      github: undefined,
+      ssh: undefined,
+      tunnelPing: undefined,
+      controlPlane: { name: "tailscale", timeoutMs: 1000 },
+    });
+    const result = await runWedgeCheck({ config, probes, now: NOW });
+    expect(result.controlPlane).toHaveLength(1);
+    expect(result.controlPlane[0]!.online).toBe("unknown");
+  });
 });
