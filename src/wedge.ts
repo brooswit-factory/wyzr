@@ -29,13 +29,17 @@
 // wall-clock timeouts belong in src/wedge-runner.ts's I/O layer, never
 // here.)
 //
-// Ground truth this module encodes (WYZR-16/WYZR-17's ticket, itself relaying
-// two real incidents dated 2026-09-02 and 2026-09-10 — not re-measured by
-// this module; see the ticket for the full account):
+// Ground truth this module encodes (WYZR-16/WYZR-17/WYZR-22's ticket, itself
+// relaying two real incidents dated 2026-09-02 and 2026-09-10 — not
+// re-measured by this module; see the ticket for the full account):
 //
 // 1. A wedge is PROVEN only when at least two INDEPENDENT outside
-//    instruments are silent together, AND every configured direct path
-//    (ssh, tunnel ping) is confirmed dead.
+//    instruments are silent together, AND the local-connectivity control
+//    was successfully read and reports healthy, AND every configured
+//    direct path (ssh, tunnel ping) is confirmed dead. All three,
+//    unconditionally — see point 5 below for why the control is a
+//    PRECONDITION of PROVEN, never merely a tiebreaker for instruments
+//    that happen to declare a shared dependency.
 // 2. Independence is a REAL COMPUTATION over each instrument's declared
 //    dependency set (InstrumentObservation.dependsOn), never a hardcoded
 //    "we have >=2 probes, therefore independent." Two silent instruments
@@ -43,7 +47,9 @@
 //    that shared dependency has been separately confirmed healthy by the
 //    local-connectivity control (see computePairIndependence() below) —
 //    this is "the independence trap" the ticket names as the hardest thing
-//    in this task.
+//    in this task. This computation only ever runs once the control is
+//    already confirmed healthy (point 5) — it decides WHICH pairs are
+//    independent, never WHETHER the control gets to be skipped.
 // 3. A green control-plane reading is recorded (WedgeResult.controlPlane)
 //    but STRUCTURALLY INCAPABLE of flipping the verdict, and can never be
 //    counted as one of the two instruments. Enforced two ways: (a)
@@ -67,6 +73,15 @@
 //    once a quorum of silent instruments would otherwise be in play; a
 //    single silent instrument (or zero) is just NOT_PROVEN — a single
 //    silent probe is a network blip, not a shared-cause question.
+//    CHECKED UNCONDITIONALLY (WYZR-22): once >= 2 instruments are silent,
+//    `evaluateWedge()` checks `localControl.outcome === "healthy"` BEFORE
+//    it ever looks at any instrument's declared `dependsOn` — a wedge
+//    running every probe from one manager box means "no declared
+//    dependency in common" is never actually "no shared cause"; it only
+//    means the declaration is incomplete. So the control being read and
+//    healthy is a precondition of PROVEN regardless of whether the silent
+//    instruments' dependency sets happen to overlap, not a check that only
+//    matters when they do.
 
 export const WedgeVerdict = {
   Proven: "PROVEN",
@@ -245,15 +260,18 @@ function assessInstrument(obs: InstrumentObservation, now: number): InstrumentAs
 }
 
 /**
- * The independence computation itself (point 2 above). Two silent
- * instruments with NO declared dependency in common are independent with no
- * further question. Two that DO share a dependency are independent only if
- * the local-connectivity control is `"healthy"` AND every shared dependency
- * appears in its `confirms` list — i.e. the shared cause has been
- * affirmatively ruled out, not merely unmentioned. Anything short of that
- * (the control unhealthy, erroring, timed out, unconfigured, or simply
- * silent about that particular dependency id) leaves the pair NOT
- * independent: sharing a dependency, on its own, never satisfies rule 1.
+ * The independence computation itself (point 2 above). ONLY EVER CALLED
+ * once `evaluateWedge()` has already confirmed the local-connectivity
+ * control is `"healthy"` (point 5) — it decides WHICH pairs of silent
+ * instruments are independent, never whether the control's own outcome
+ * gets to be skipped. Two silent instruments with NO declared dependency in
+ * common are independent with no further question — this is a statement
+ * about their declared data, not a second, weaker way to rule out a shared
+ * cause; the control having already been read and healthy is what makes it
+ * safe to trust that declaration here. Two that DO share a dependency are
+ * independent only if every shared dependency appears in the control's
+ * `confirms` list — i.e. the shared cause has been affirmatively ruled out
+ * for that specific dependency, not merely unmentioned.
  */
 function computePairIndependence(
   a: InstrumentAssessment,
@@ -267,18 +285,6 @@ function computePairIndependence(
   }
 
   const plural = sharedDependencies.length === 1 ? "dependency" : "dependencies";
-
-  if (localControl.outcome !== "healthy") {
-    return {
-      a: a.name,
-      b: b.name,
-      sharedDependencies,
-      independent: false,
-      reason:
-        `shared ${plural} (${sharedDependencies.join(", ")}) not ruled out — ` +
-        `local-connectivity control is "${localControl.outcome}", not healthy`,
-    };
-  }
 
   const confirmed = new Set(localControl.confirms);
   const unconfirmed = sharedDependencies.filter((d) => !confirmed.has(d));
@@ -341,6 +347,32 @@ export function evaluateWedge(input: WedgeInput): WedgeResult {
     return { verdict: WedgeVerdict.NotProven, reasons, ...base, independentPairFound: null, independencePairs: [] };
   }
 
+  // PRECONDITION OF PROVEN (WYZR-22), checked BEFORE any pair's declared
+  // dependencies are even looked at: once >= 2 instruments are silent, the
+  // local-connectivity control must have been successfully read and report
+  // "healthy", full stop. wyzr runs every probe from one manager box, so
+  // "these two instruments declare no dependency in common" is never actual
+  // proof their silence has no shared cause — it only means their
+  // declarations don't mention the one dependency every instrument here
+  // inherently has. Whatever the dependency sets look like, an unhealthy,
+  // erroring, timed-out, or unconfigured control means the shared cause was
+  // never ruled out, so this can never be scored as independent evidence —
+  // it is INCONCLUSIVE_BY_SHARED_CAUSE, "I could not look," never PROVEN.
+  if (input.localControl.outcome !== "healthy") {
+    reasons.push(
+      `>=2 instruments are silent, but the local-connectivity control is "${input.localControl.outcome}", not ` +
+        "healthy — the shared cause (this box's own connectivity) cannot be ruled out, so their silence cannot be " +
+        "scored as independent evidence about the suspect box, regardless of their declared dependency sets",
+    );
+    return {
+      verdict: WedgeVerdict.InconclusiveBySharedCause,
+      reasons,
+      ...base,
+      independentPairFound: null,
+      independencePairs: [],
+    };
+  }
+
   const pairs: IndependencePair[] = [];
   for (let x = 0; x < silent.length; x++) {
     for (let y = x + 1; y < silent.length; y++) {
@@ -350,20 +382,6 @@ export function evaluateWedge(input: WedgeInput): WedgeResult {
   const independentPairFound = pairs.find((p) => p.independent) ?? null;
 
   if (!independentPairFound) {
-    if (input.localControl.outcome !== "healthy") {
-      reasons.push(
-        `>=2 instruments are silent, but the local-connectivity control is "${input.localControl.outcome}" — ` +
-          "the shared cause (this box's own connectivity) cannot be ruled out, so their silence cannot be " +
-          "scored as independent evidence about the suspect box",
-      );
-      return {
-        verdict: WedgeVerdict.InconclusiveBySharedCause,
-        reasons,
-        ...base,
-        independentPairFound: null,
-        independencePairs: pairs,
-      };
-    }
     reasons.push(
       "no pair of silent instruments is independent — every pair shares a dependency the local-connectivity " +
         "control did not confirm healthy",
