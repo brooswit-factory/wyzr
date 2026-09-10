@@ -156,6 +156,56 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **wyzr could not log in at all, even with correct credentials** (WYZR-15).
+  Root cause: this project believed the Wyze auth host and device host
+  shared one `{code,msg,data}` response envelope; they do not, and the
+  auth host's request shape was also wrong (`keyid`/`apikey` sent in the
+  JSON body instead of as headers, plus an unnecessary `x-api-key` header
+  and an unrequired `nonce` field — see `src/transport.ts`'s `LoginRequest`
+  doc comment). Fixed, all verified against a real, live-measured API
+  response wherever one exists (placeholder-credential probe for both
+  hosts' error shapes; a relayed real-account measurement — see each
+  affected file's own header comment — for the request/success shapes):
+  - `src/wyze-auth-envelope.ts` (new): the auth host's own envelope type
+    and functions (success — tokens at the top level, not nested under
+    `data` — MFA-challenge detection, token extraction, error detection),
+    separate from `src/wyze-envelope.ts`'s device-host envelope, which is
+    unchanged in its own code path.
+  - `src/transport-http.ts`: `login()`/`submitMfa()` send `keyid`/`apikey`
+    as headers with a body of only `{email, password}`; every
+    `api.wyzecam.com` call now carries the device host's required
+    "standard body" (`src/wyze-device-identity.ts`, new — replaces the
+    retired `src/app-identity.ts`); `get_property_list`/`set_property` use
+    `device_mac`/`device_model`, and `set_property` sends `pvalue` (a
+    STRING) instead of `value` (an integer).
+  - `src/plug.ts`: decision (A) revised — `P3`/`P5` are wire-encoded as
+    strings, not integers; `SetPropertyRequest.value` (`src/transport.ts`)
+    is now typed `"0" | "1"`, never a bare number.
+  - `src/wyze-errors.ts`: `wyzeInvalidCredentialsOrSsoOnlyError()` rewritten
+    to name a third cause behind `errorCode 1000` (a malformed request the
+    host never read a key from) alongside the original two (wrong
+    credentials; an SSO-only account) — the old wording would have sent an
+    operator to change a password that was never the problem.
+  - `src/transport-fake.ts`: every fixture standing in for a real response
+    is now tagged, in its own doc comment, with its provenance
+    (`CAPTURED-LIVE`, `RELAYED`, or `ASSUMED`) — `grep -rn "PROVENANCE:
+    ASSUMED" src/` finds every belief in this repo never checked against
+    the real API.
+  - `docs/wyze-no-credential-probing.md` (new): the repeatable, rate-limit-
+    aware manual procedure for observing either host's real error envelope
+    with no Wyze account, plus a companion section recording which shapes
+    are genuinely credential-gated.
+  - `docs/wyze-api-findings-2026-09-02.md` §Q3 corrected in place, dated,
+    tiered per-claim in the document's own style.
+  - End-to-end through the CLI: a well-formed `credentials.json` with
+    obviously-fake placeholder credentials now produces the (rewritten)
+    credentials-invalid message and exit `3`, where it previously produced
+    `"Wyze API returned an error (code undefined)."` and exit `6`. See the
+    PR body for the exact before/after transcript and what that
+    comparison does and does not prove (a placeholder-credential run
+    cannot, by itself, distinguish "request shape now correct" from "still
+    malformed" — both look identical from the outside; only a real-account
+    login can tell them apart).
 - `src/totp.ts`'s `base32Decode()` no longer echoes the offending
   character into its thrown message when a configured `totpSecret` is not
   valid base32 (e.g. a password pasted into the wrong field by mistake) —
@@ -175,8 +225,14 @@ All notable changes to this project are documented in this file.
   identically to absent/`null`, fixed at the source so the exported type's
   optionality means what it says. Carried forward from WYZR-10's review.
 
-**Nothing added in this story has ever been exercised against a real Wyze
-account or device** — see README's "Live-device coverage" section.
+**Nothing added in the WYZR-13 story above has ever been exercised against
+a real Wyze account or device** — see README's "Live-device coverage"
+section. (WYZR-15, above, is the one exception in this file: its auth-host
+and device-host ERROR envelope shapes are this project's own direct,
+placeholder-credential observation, and its request/success shapes are a
+real-account measurement relayed from elsewhere — see that entry and
+README's "Live-device coverage" for exactly what that provenance does and
+does not cover.)
 
 ## [0.1.0] - 2026-09-02
 

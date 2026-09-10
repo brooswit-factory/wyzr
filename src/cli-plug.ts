@@ -113,7 +113,7 @@ export async function runPlugWrite(
   json: boolean,
 ): Promise<number> {
   const { session, resolved } = await loginAndResolve(deps, deviceQuery);
-  await session.setProperty(resolved.mac, resolved.model, "P3", requested === "on" ? 1 : 0);
+  await session.setProperty(resolved.mac, resolved.model, "P3", requested === "on" ? "1" : "0");
 
   let reading: PlugReading;
   try {

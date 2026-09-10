@@ -4,25 +4,41 @@
 // has one home instead of being inlined at each call site.
 
 import { CliError, ExitCode } from "./errors.ts";
+import { authErrorCode, authErrorDescription, authRequestId, type WyzeAuthEnvelope } from "./wyze-auth-envelope.ts";
 import { normalizeCode, normalizeMsg, type WyzeEnvelope } from "./wyze-envelope.ts";
 
 /**
- * errorCode 1000: a genuinely wrong password OR an SSO-only account with
- * no Wyze-native password for the triple-MD5 chain to hash — the SAME
- * code either way (docs/wyze-api-findings-2026-09-02.md §Q3/§Q7). The
- * message below deliberately names BOTH possibilities and points at the
- * fix, per the ticket's specific, named requirement — do not simplify this
- * back down to a bare "invalid credentials."
+ * errorCode 1000 — REWRITTEN by WYZR-15, and this is a REVERSAL of what
+ * this project previously shipped, not just a rewording. The earlier
+ * message named exactly TWO indistinguishable causes (wrong password;
+ * SSO-only account) on the belief those were the only ones. That belief
+ * was an UNDER-COUNT: WYZR-15's live-account measurement showed this
+ * project's OWN login request was malformed (keyid/apikey sent in the
+ * body instead of as headers — see src/transport.ts's LoginRequest doc
+ * comment) and that THIS SAME errorCode 1000 is what a real, correct
+ * account got back for it — i.e. "Wyze never saw the key at all" is a
+ * THIRD, genuinely different cause behind the identical code. A message
+ * that confidently named only two causes, when the true cause was wyzr's
+ * own malformed request, would have sent an operator to change a password
+ * that was never the problem — worse than no message at all.
+ *
+ * The SSO warning is NOT dropped (docs/wyze-api-findings-2026-09-02.md
+ * §Q3/§Q7 documents it as real, and the provisioning action item it names
+ * still stands) — this message simply stops overclaiming that it is one
+ * of only two possibilities.
  */
 export function wyzeInvalidCredentialsOrSsoOnlyError(): CliError {
   return new CliError(
-    "Wyze login failed (errorCode 1000). This means ONE of two things: (1) the email, password, " +
-      "keyId, or keySecret in credentials.json is wrong, OR (2) this Wyze account has no Wyze-native " +
-      "password because it was created via Google/Apple SSO, so there is nothing for the required " +
-      "password hash to hash — Wyze returns the SAME errorCode 1000 for both cases. To tell them apart: " +
-      "open the Wyze app -> Account -> Security and look for \"Change Password.\" If it is not there, " +
-      "this account is SSO-only and needs a Wyze-specific password set there before wyzr can log in. " +
-      "If it IS there, double-check email/password/keyId/keySecret in credentials.json instead.",
+    "Wyze login failed (errorCode 1000). Wyze returns this SAME code for more than one distinct cause, " +
+      "and its response does not say which: (1) the email, password, keyId, or keySecret in " +
+      "credentials.json is wrong; (2) this Wyze account has no Wyze-native password because it was " +
+      "created via Google/Apple SSO, so there is nothing for the required password hash to hash; or " +
+      "(3) a bug in wyzr itself sent a request Wyze could not read the login key from at all — a client " +
+      "problem, not a credentials or account problem. To check (2): open the Wyze app -> Account -> " +
+      "Security and look for \"Change Password.\" If it is not there, this account is SSO-only and needs " +
+      "a Wyze-specific password set there before wyzr can log in. If it IS there, double-check " +
+      "email/password/keyId/keySecret in credentials.json for (1). If both check out, this may be (3) — " +
+      "please report it, since it likely means a bug in wyzr's own request, not something wrong on your end.",
     ExitCode.CredentialsInvalid,
     "wyze_login_invalid_or_sso_only",
   );
@@ -137,5 +153,30 @@ export function wyzeGenericApiError(envelope: WyzeEnvelope): CliError {
     `Wyze API returned an error (code ${code}${msg ? `, msg "${msg}"` : ""}).`,
     ExitCode.ApiError,
     `wyze_api_error_${code}`,
+  );
+}
+
+/** The AUTH-host counterpart of wyzeGenericApiError() above — any
+ * auth-host response not covered by a more specific error (i.e. not
+ * routed to wyzeInvalidCredentialsOrSsoOnlyError() via
+ * isAuthInvalidCredentialsCode()). Reads the auth host's own
+ * errorCode/description/requestId fields (src/wyze-auth-envelope.ts),
+ * never `envelope.raw` wholesale — "report position, never content," per
+ * the ticket. `requestId` is server-generated, not derived from anything
+ * in the request body, so it is safe to surface as a support-trail
+ * correlation id (the device host's equivalent field is `traceId` — see
+ * the ticket's structural fact 2 — decoding that stays wyzeGenericApiError()'s
+ * job, not this one's). */
+export function wyzeGenericAuthApiError(envelope: WyzeAuthEnvelope): CliError {
+  const code = authErrorCode(envelope);
+  const description = authErrorDescription(envelope);
+  const requestId = authRequestId(envelope);
+  const detail = [description && `"${description}"`, requestId && `requestId ${requestId}`]
+    .filter((part): part is string => Boolean(part))
+    .join(", ");
+  return new CliError(
+    `Wyze auth API returned an error (errorCode ${code}${detail ? `, ${detail}` : ""}).`,
+    ExitCode.ApiError,
+    `wyze_auth_api_error_${code}`,
   );
 }

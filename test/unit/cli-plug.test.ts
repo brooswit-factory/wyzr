@@ -166,7 +166,7 @@ describe("runPlugWrite", () => {
     expect(code).toBe(ExitCode.Ok);
     expect(setCalls).toHaveLength(1);
     expect(setCalls[0]!.pid).toBe("P3");
-    expect(setCalls[0]!.value).toBe(1); // never `true`
+    expect(setCalls[0]!.value).toBe("1"); // never `1` (a number) or `true`
     const printed = JSON.parse(String(logSpy.mock.calls[0]![0]));
     expect(printed).toEqual({
       schemaVersion: 1,
@@ -182,7 +182,7 @@ describe("runPlugWrite", () => {
     logSpy.mockRestore();
   });
 
-  test("plug off sends P3=0, never a boolean", async () => {
+  test("plug off sends P3=\"0\", never a number or a boolean", async () => {
     const setCalls: SetPropertyRequest[] = [];
     const transport = new FakeWyzeTransport({
       getObjectListHandler: () => fakeGetObjectListEnvelope(ONE_PLUG),
@@ -197,7 +197,7 @@ describe("runPlugWrite", () => {
     const code = await runPlugWrite({ transport, credentials: FAKE_CREDS }, "Garage Plug", "off", true);
 
     expect(code).toBe(ExitCode.Ok);
-    expect(setCalls[0]!.value).toBe(0);
+    expect(setCalls[0]!.value).toBe("0");
     restore();
   });
 

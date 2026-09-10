@@ -5,23 +5,26 @@ import {
   FAKE_PLUG_STATE_UNKNOWN,
   FakeWyzeTransport,
   fakeAccessTokenExpiredEnvelope,
+  fakeAuthInvalidCredentialsEnvelope,
+  fakeAuthMfaSmsChallengeEnvelope,
+  fakeAuthMfaTotpChallengeEnvelope,
+  fakeAuthSuccessEnvelope,
   fakeGetObjectListEnvelope,
   fakeInvalidCredentialsEnvelope,
-  fakeMfaSmsChallengeEnvelope,
-  fakeMfaTotpChallengeEnvelope,
   fakePropertyListEnvelope,
   fakeSetPropertyEnvelope,
   fakeSuccessEnvelope,
 } from "../../src/transport-fake.ts";
 import { decodeP3, decodeP5 } from "../../src/plug.ts";
-import { detectMfaChallenge, isAccessTokenExpired, isInvalidCredentialsCode, isSuccessEnvelope } from "../../src/wyze-envelope.ts";
+import { detectAuthMfaChallenge, isAuthSuccessEnvelope } from "../../src/wyze-auth-envelope.ts";
+import { isAccessTokenExpired, isSuccessEnvelope } from "../../src/wyze-envelope.ts";
 
 const REQ = { email: "e", passwordHash: "p", nonce: "n", keyId: "k", keySecret: "s" };
 
 describe("FakeWyzeTransport — defaults", () => {
   test("login defaults to a success envelope", async () => {
     const transport = new FakeWyzeTransport();
-    expect(isSuccessEnvelope(await transport.login(REQ))).toBe(true);
+    expect(isAuthSuccessEnvelope(await transport.login(REQ))).toBe(true);
   });
 
   test("getObjectList defaults to the synthetic device-list envelope", async () => {
@@ -39,7 +42,7 @@ describe("FakeWyzeTransport — defaults", () => {
 
   test("setProperty defaults to a success envelope", async () => {
     const transport = new FakeWyzeTransport();
-    const envelope = await transport.setProperty({ accessToken: "at", mac: "m", model: "md", pid: "P3", value: 1 });
+    const envelope = await transport.setProperty({ accessToken: "at", mac: "m", model: "md", pid: "P3", value: "1" });
     expect(isSuccessEnvelope(envelope)).toBe(true);
   });
 });
@@ -118,9 +121,9 @@ describe("fakeSetPropertyEnvelope — synthetic set_property fixture", () => {
 
 describe("FakeWyzeTransport — handler overrides drive every scenario a test needs", () => {
   test("can simulate an invalid-credentials (1000) login", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeInvalidCredentialsEnvelope() });
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthInvalidCredentialsEnvelope() });
     const envelope = await transport.login(REQ);
-    expect(isInvalidCredentialsCode(envelope)).toBe(true);
+    expect(envelope.raw["errorCode"]).toBe(1000);
   });
 
   test("can simulate an expired-access-token response from getObjectList", async () => {
@@ -130,14 +133,14 @@ describe("FakeWyzeTransport — handler overrides drive every scenario a test ne
   });
 
   test("can simulate a TOTP MFA challenge on login", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaTotpChallengeEnvelope() });
-    const challenge = detectMfaChallenge(await transport.login(REQ));
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaTotpChallengeEnvelope() });
+    const challenge = detectAuthMfaChallenge(await transport.login(REQ));
     expect(challenge?.mfaType).toBe("TOTP");
   });
 
   test("can simulate an SMS MFA challenge on login", async () => {
-    const transport = new FakeWyzeTransport({ loginHandler: () => fakeMfaSmsChallengeEnvelope() });
-    const challenge = detectMfaChallenge(await transport.login(REQ));
+    const transport = new FakeWyzeTransport({ loginHandler: () => fakeAuthMfaSmsChallengeEnvelope() });
+    const challenge = detectAuthMfaChallenge(await transport.login(REQ));
     expect(challenge?.mfaType).toBe("SMS");
   });
 
@@ -148,9 +151,11 @@ describe("FakeWyzeTransport — handler overrides drive every scenario a test ne
   });
 
   test("submitMfa can be overridden independently of login", async () => {
-    const transport = new FakeWyzeTransport({ submitMfaHandler: () => fakeSuccessEnvelope({ accessToken: "mfa-at" }) });
+    const transport = new FakeWyzeTransport({
+      submitMfaHandler: () => fakeAuthSuccessEnvelope({ accessToken: "mfa-at" }),
+    });
     const envelope = await transport.submitMfa({ ...REQ, verificationId: "vid", mfaType: "TOTP", verificationCode: "000000" });
-    expect((envelope.data as { access_token: string }).access_token).toBe("mfa-at");
+    expect(envelope.raw["access_token"]).toBe("mfa-at");
   });
 });
 
@@ -166,5 +171,11 @@ describe("fake envelope builders are all clearly synthetic fixtures", () => {
     const data = envelope.data as { access_token: string; refresh_token: string };
     expect(data.access_token.toUpperCase()).toContain("FAKE");
     expect(data.refresh_token.toUpperCase()).toContain("FAKE");
+  });
+
+  test("fakeAuthSuccessEnvelope's default tokens are unambiguously labeled fake, and live at the top level", () => {
+    const envelope = fakeAuthSuccessEnvelope();
+    expect(String(envelope.raw["access_token"]).toUpperCase()).toContain("FAKE");
+    expect(String(envelope.raw["refresh_token"]).toUpperCase()).toContain("FAKE");
   });
 });

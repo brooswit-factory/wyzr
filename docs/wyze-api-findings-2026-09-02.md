@@ -146,7 +146,9 @@ Two distinct credential-like values are involved, not one:
 
 1. `keyid` / `apikey` — the user's own Developer API Key ID + Secret,
    generated from `developer-api-console.wyze.com`, sent as extra fields on
-   the login call. This matches H2. (b)
+   the login call. This matches H2. (b) **See the 2026-09-10 correction
+   below the response-envelope paragraph in this section: "sent as extra
+   fields" is WRONG for the login call specifically — they are HEADERS.**
 2. An `x-api-key` header — a **separate, fixed, non-user-specific** value
    that is hardcoded directly into the `wyze-sdk` source itself. It
    identifies the calling SDK/app, not the end user. H2 did not anticipate
@@ -193,6 +195,76 @@ Response envelope, for every call (auth and device alike):
 means success; `code == 1000` covers invalid-credentials / too-many-failed-
 attempts; `code == 2001` (or `msg == "AccessTokenError"`) means the access
 token expired and must be refreshed. (b, `wyze_sdk/service/wyze_response.py`)
+
+> **CORRECTION, 2026-09-10 (WYZR-15) — the envelope claim above is WRONG
+> for the auth host and RIGHT for the device host; this over-generalisation
+> was the root cause of a real defect (wyzr could not log in at all).**
+> Corrected in place, not just noted, because the wrong half of this claim
+> shipped into code that then failed silently — see `src/wyze-envelope.ts`
+> and `src/wyze-auth-envelope.ts`'s header comments for the full technical
+> account. What changed, by confidence tier:
+>
+> - **Auth-host ERROR envelope: tier (a), directly observed by this
+>   project.** A `POST` to `auth-prod.api.wyze.com/api/user/login` with
+>   entirely placeholder credentials, matching `RealWyzeTransport`'s
+>   request construction, returns `HTTP 400` with
+>   `{"description": "...", "requestId": "...", "errorCode": 1000}` —
+>   top-level keys sorted `["description","errorCode","requestId"]`, **NO**
+>   `code`, **NO** `msg`, **NO** `data`, and `errorCode` as the JSON
+>   **number** `1000`, not a string. Observed independently by two agents
+>   on two hosts under two Atlassian identities, then reproduced a third
+>   time as WYZR-15's own first action, then swept across a
+>   missing-required-field variant (`errorCode: 5000`, `"Internal Error"`)
+>   and a plainly-bad-`keyid` variant (`errorCode: 1000` again) — same
+>   shape every time. See `docs/wyze-no-credential-probing.md` for the
+>   repeatable procedure this used, needing no Wyze account.
+> - **Auth-host SUCCESS envelope: measured, but RELAYED — not observed
+>   directly by this repo's own authors.** A human provisioned real
+>   credentials on a separate box; an assistant there exercised a real
+>   login and reported (via a four-hop relay: assistant → project → epic →
+>   this ticket) `HTTP 200` with `access_token`/`refresh_token`/`user_id`
+>   at the **top level** of the body (not nested under `data`), plus
+>   `mfa_options`/`mfa_details`/`sms_session_id`/`email_session_id` all
+>   present but `null` on that account. Treat this at the confidence a
+>   relayed third-party report deserves: strong (obtained by changing one
+>   thing at a time against a real, working account), but not this
+>   project's own tier (a) observation, and vulnerable to a transcription
+>   error at any hop. Independently corroborated at tier (b) by reading
+>   `shauntarves/wyze-sdk`'s own source (`wyze_sdk/service/auth_service.py`,
+>   `wyze_sdk/service/wyze_response.py`, read 2026-09-10): its
+>   `WyzeResponse.__getitem__`/`.get()` index the raw parsed body directly
+>   (no nested `data` key of its own), and `user_login()` reads
+>   `response["access_token"]` off exactly that object — the reference
+>   implementation also expects top-level tokens on this host.
+> - **The `keyid`/`apikey` fields above are WRONG for the login call — they
+>   are HEADERS, not body fields**, per that same relayed measurement; the
+>   working body is `{"email": ..., "password": ...}` **and nothing else**
+>   — no `nonce` either, contradicting this section's own "plus a request
+>   `nonce`" line above, which was never itself measured (tier (b), an
+>   inference from the SDK's source that turned out to describe a field the
+>   real endpoint does not require). The triple-MD5 password hash itself
+>   IS confirmed correct as implemented.
+> - **Device-host envelope: unchanged, and UPGRADED to tier (a).** A
+>   `get_property_list` call with a placeholder access token returned
+>   `HTTP 200`, `{"code":"1001","msg":"INVALID_PARAMETER","data":{}}` —
+>   exactly this section's `{code,msg,data}` shape, `code` as a string.
+>   This half of the original claim was right; only "auth and device
+>   alike" was wrong. The RELAYED measurement separately confirmed the
+>   device host also requires a much larger "standard body" than a bare
+>   call-specific payload (see `src/wyze-device-identity.ts`) and that
+>   `get_property_list`/`set_property` use `device_mac`/`device_model`
+>   /`pvalue` (a STRING), not this document's or this project's earlier
+>   `mac`/`model`/`value`-as-integer assumptions — see `src/plug.ts`'s
+>   decision (A) for the full correction.
+> - **MFA shape: STILL UNKNOWN, unchanged by any of the above.** The one
+>   relayed real login did not trigger a challenge (`mfa_options` was
+>   `null`), so this document's MFA description remains tier (b) at best
+>   (the same SDK source read) and this project's own field-level guesses
+>   for a challenge's shape remain tier (d), never observed by anyone.
+> - **The static app-identity constants (`sc`/`sv`/`app_ver`/...): the
+>   device host ACCEPTED them, measured. Whether a MINTED identity would be
+>   REFUSED was never tested — do not read the former as proving the
+>   latter; see `src/wyze-device-identity.ts`'s header comment.**
 
 ### Q4 — Endpoints for the four operations `wyzr` needs
 
