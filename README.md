@@ -278,65 +278,116 @@ directly, so its login/MFA/refresh logic is fully exercised by
 `test/unit/auth-session.test.ts` against the fake, with **zero credentials
 and zero network**.
 
-### The fake's responses are SYNTHETIC, not a capture
+### The fake's responses are tiered by provenance, not all "synthetic"
 
 `docs/wyze-api-findings-2026-09-02.md`'s explicit unknown #1 is that no
-captured example of a real Wyze response payload exists in any (a)/(b)-tier
-source found during that research. Every canned envelope in
-`src/transport-fake.ts` is therefore **constructed from the finding's
-description of the envelope shape**, never observed — each export is
-labeled `SYNTHETIC` in its own doc comment. A green test against this fake
-proves this repo's code matches this repo's own belief about the Wyze API.
-**It is not, and must never be read as, evidence about the real API.**
+captured example of a real Wyze *device*-host response payload exists in
+any (a)/(b)-tier source found during that research — that unknown still
+stands for `get_object_list`/`get_property_list`/`set_property`. WYZR-15
+closed a NARROWER unknown, though: the *auth* host's **error** shape needs
+no account at all, only a well-formed request with placeholder credentials
+(see `docs/wyze-no-credential-probing.md`) — so it has actually been
+captured now.
+
+Every fixture in `src/transport-fake.ts` is tagged, in its own doc
+comment, `PROVENANCE: CAPTURED-LIVE <date>` (built from a real observed
+response, one-time fields like a request id replaced with a fixed
+placeholder) or `PROVENANCE: ASSUMED (tier (d)[, corroborated ...])` (no
+real response of this shape has ever been observed — constructed from the
+finding's description and/or a community-SDK source read).
+`grep -rn "PROVENANCE: ASSUMED" src/` finds every belief in this repo that
+has never been checked against the real API. A green test against an
+ASSUMED fixture proves this repo's code matches this repo's own belief
+about the Wyze API — **it is not, and must never be read as, evidence
+about the real API.** A green test against a CAPTURED-LIVE fixture is
+stronger, but still only as current as its capture date.
 
 ### Auth flow
 
-`login()` sends, per the finding's §Q3 (tier (b), read from the
-actively-maintained `wyze-sdk`'s own source):
+`login()` sends, per WYZR-15's live-account measurement (RELAYED, not
+observed directly by this repo's own authors — see "TWO response
+envelopes" below for what that provenance means), which SUPERSEDED an
+earlier, incorrect tier-(b) belief read from the community `wyze-sdk`'s
+source:
 
-- `email` — plain, from `credentials.json`.
+- `email` — plain, from `credentials.json`, in the JSON body.
 - `password` — **never raw**. Sent as `md5(md5(md5(password)))`
   (`src/wyze-auth-hash.ts`'s `wyzeTripleMd5`), MD5 applied three times in a
-  chain. Get this wrong and login fails with the same errorCode 1000 as a
-  wrong password (see below) — there is no way to tell the two apart from
-  the response alone.
-- `nonce` — a fresh value per login attempt. The finding documents that a
-  nonce is sent but not its required format; the default here
-  (`String(Date.now())`) is this project's own reasonable choice, not a
-  confirmed Wyze requirement, and is injectable (`AuthSessionDeps.nonce`)
-  for tests and for a future correction.
+  chain, in the JSON body. This part of the pre-WYZR-15 belief was
+  CONFIRMED correct — get it wrong and login fails with the same
+  errorCode 1000 as a wrong password (see below), so there is no way to
+  tell the two apart from the response alone.
 - `keyid` / `apikey` — the user's own Developer API Key ID/Secret, from
-  `credentials.json` (`keyId`/`keySecret`).
+  `credentials.json` (`keyId`/`keySecret`) — as **HTTP HEADERS**, not
+  body fields. This is the correction: wyzr's pre-WYZR-15 shape sent
+  these in the body instead, which the real auth host rejects outright
+  (HTTP 400, errorCode 1000) even with perfectly correct credentials.
 
-Every call additionally carries an `x-api-key` header — see "The
-app-identity key" below.
+That is the WHOLE body — no `nonce` field. An earlier belief (tier (b),
+inferred from the SDK's source, never itself measured) held that a fresh
+nonce was required; WYZR-15's measurement showed the real, working login
+body is exactly `{email, password}` and nothing else, so `nonce` — and
+the `AuthSessionDeps.nonce`/injectable-clock machinery that generated one
+— is retired outright, not merely unused.
+
+The pre-WYZR-15 shape ALSO sent an `x-api-key` header on every call,
+identifying the app itself — retired too; see "The app-identity key"
+below for what replaced it, and only on the OTHER host.
 
 ### The app-identity key
 
-The finding (§Q3) is explicit that a **second, separate, non-user-specific
-key** is sent as `x-api-key`, hardcoded into the community SDK's own
-source to identify the calling app/library, distinct from the user's own
-key pair above. The finding deliberately declined to reproduce that
-embedded value, and the ticket forbade copying it out of another project's
-source.
+**Retired for the auth host, replaced by something different (and
+required) on the device host — read this section, don't assume it means
+what the old heading implied.**
 
-`src/app-identity.ts` mints wyzr's own: `APP_IDENTITY_KEY` is the SHA-256
-hex digest of a fixed, versioned, wholly-public seed string,
-`"wyzr-app-identity-key-v1"`, naming this project — not derived from,
-resembling, or related to any other project's key. **Whether Wyze's API
-accepts a value it never issued is UNVERIFIED** — the finding is explicit
-(tier (d)) that it could not check this without an authenticated call,
-which is out of scope for this project. Treat "our key is accepted" as an
-untested hope, not a working assumption.
+The finding (§Q3) originally described a **second, separate,
+non-user-specific key**, sent as `x-api-key`, hardcoded into the
+community SDK's own source to identify the calling app/library. wyzr
+minted its own equivalent (`src/app-identity.ts`, now removed) rather than
+copying the SDK's embedded value. The header is gone, not migrated — but
+the two hosts are NOT in the same evidentiary state, and it matters which:
+the relayed **auth-host** measurement enumerated the working login
+request's *full header set* (`keyid`, `apikey`, `content-type`) — no
+`x-api-key` among them — so "the working login doesn't carry it" is a
+genuine observation. The relayed **device-host** measurement recorded a
+*body* only; it never recorded that request's headers at all, in either
+direction, so "no working device-host call carries this header" would
+itself be exactly the kind of one-step-past-the-evidence claim this
+section warns about below — this project does NOT claim that. The header
+is retired for the device host as the defensible default (an unobserved
+header nobody has evidence for is not something to keep sending on a
+guess), not because any request was observed to work without it.
+
+What the device host (`api.wyzecam.com`) ACTUALLY requires instead is a
+much larger **"standard body"** merged into every call's JSON payload —
+`sc`/`sv`/`app_ver`/`app_name`/`app_version`/`phone_id`/
+`phone_system_type`/`ts` (`src/wyze-device-identity.ts`,
+`deviceStandardBody()`). A request missing these fields is rejected
+(`{"code":"1001","msg":"INVALID_PARAMETER"}`) even with a perfectly valid
+access token. `sc`/`sv`/`app_ver`/`app_name`/`app_version` are, by every
+visible signature, the community SDK's own static app identity — the
+exact thing this project's root doc previously recorded a deliberate
+choice NOT to lift. **State this precisely, per the ticket's own
+retraction of an earlier overstatement**: MEASURED — the device host
+ACCEPTED these static values, verbatim, on a request a bare
+`{access_token}` body was rejected for. NEVER TESTED — whether a MINTED
+identity in the same field slots would be refused. wyzr ships the static
+values because they are the only ones ever shown to work, **not** because
+minting was tried and failed — nobody has run that experiment, and it
+would need the real device host this project has no access to. See
+`src/wyze-device-identity.ts`'s header comment for the full record.
 
 ### MFA handling — and its limits
 
 The finding establishes (tier (b)) that login can return a TOTP or SMS
-challenge. `src/auth-session.ts` detects a challenge from the response
-`data`'s shape (`mfa_options` + a verification id — see
-`src/wyze-envelope.ts`'s `detectMfaChallenge()`), checked **before** any
-`code`-based success/failure interpretation, because the finding does not
-establish what `code` value accompanies a challenge.
+challenge. `src/auth-session.ts` detects a challenge from the auth-host
+response's own top-level shape (`mfa_options`, plus — as of WYZR-15's
+correction — a TOTP verification id at `mfa_details.totp_apps[0].app_id`
+or an SMS session id at `sms_session_id`; see
+`src/wyze-auth-envelope.ts`'s `detectAuthMfaChallenge()`), checked
+**before** any success/error interpretation, because neither the finding
+nor the auth host's own measured shape establishes anything that
+accompanies a challenge as reliably as `mfa_options`'s presence.
 
 - **TOTP, with a `totpSecret` configured**: answered automatically.
   `src/totp.ts` implements RFC 4226 HOTP and RFC 6238 TOTP against
@@ -370,42 +421,115 @@ establish what `code` value accompanies a challenge.
 finding's explicit unknown #2: whether the account that eventually gets
 provisioned will hit MFA at all, and which kind, is unknowable until that
 account exists. Beyond that, the exact wire-format field names this module
-reads (`mfa_options`, `verification_id`, `sms_session_id`) and the
-MFA-answer endpoint/body shape (`submitMfa` re-POSTs to the login endpoint
-— see `src/transport-http.ts`) are this author's own inference (tier (d)),
-modeled on common reverse-engineered mobile-app auth patterns, not
-confirmed against any captured real payload. The TOTP **math** is proven
-correct against a published standard; the **plumbing** that detects and
-answers a real Wyze challenge has never run against one.
+reads (`mfa_options`, `mfa_details.totp_apps[0].app_id`, `sms_session_id`)
+and the MFA-answer endpoint/body shape (`submitMfa` re-POSTs to the login
+endpoint — see `src/transport-http.ts`) are tier (d) — this author's own
+inference — corroborated tier (b) by reading the community
+`shauntarves/wyze-sdk` Python source directly (see
+`src/wyze-auth-envelope.ts`'s header comment for exactly what was read and
+when), but still not confirmed against any captured real payload. The
+TOTP **math** is proven correct against a published standard; the
+**plumbing** that detects and answers a real Wyze challenge has never run
+against one.
 
-### The response envelope, and the string-vs-number ambiguity
+### TWO response envelopes, not one — the WYZR-15 correction
 
-Every call's response is `{"code": ..., "msg": ..., "data": {...}}`
-(`src/wyze-envelope.ts`). The finding is explicit that success (`code ==
-"1"`) is a **string**, not the number `1` — a strict `=== 1` check would be
-silently wrong. It gives `1000` (invalid credentials) and `2001`
-(access-token-expired) "without pinning their wire type as carefully."
+Until WYZR-15, this repo believed one envelope shape held "on every call,
+auth and device alike." **That was wrong**, and is documented as the root
+cause it was in `docs/wyze-api-findings-2026-09-02.md`'s §Q3 correction.
+Measured directly on 2026-09-10, with placeholder credentials, against
+both real hosts:
 
-This repo's answer: `normalizeCode()`/`normalizeMsg()` coerce `code`/`msg`
-to a string with `String(...)` **once**, and every comparison
-(`isSuccessEnvelope`, `isInvalidCredentialsCode`, `isAccessTokenExpired`)
-goes through that normalized form — so a wire value of the number `1000`
-and the string `"1000"` are handled identically, and likewise for `1`,
-`2001`, and any other code the finding didn't pin down. This was verified
-red-first: see the PR body for the exact failing output observed when
-`isSuccessEnvelope` was temporarily changed to compare against the number
-`1` instead.
+- **The DEVICE host** (`api.wyzecam.com` — `getObjectList`/
+  `getPropertyList`/`setProperty`, and `refreshToken` too, despite its name
+  suggesting otherwise) answers `{"code": ..., "msg": ..., "data": {...}}`
+  over HTTP 200, **even on error** (`src/wyze-envelope.ts`). This part of
+  the original belief was correct — WYZR-15's own measurement (a
+  `get_property_list` call with a placeholder token) upgraded it from tier
+  (b) to tier (a) and changed nothing about it.
+- **The AUTH host** (`auth-prod.api.wyze.com` — `login`/`submitMfa` only)
+  answers something else entirely (`src/wyze-auth-envelope.ts`): its error
+  shape is `{"description": ..., "errorCode": ..., "requestId": ...}` —
+  **no `code`, `msg`, or `data` at all** — over **HTTP 400**, not 200.
+  Every function that used to read `envelope.code`/`envelope.data` against
+  a real auth-host response silently got `undefined` for all three: an MFA
+  challenge was never detected, a successful login was never recognized as
+  one, and `errorCode 1000` never reached the SSO-or-wrong-password
+  message below — it fell through to a generic "code undefined" error
+  instead. Traced through the merged source, this meant **wyzr most likely
+  could not log in at all, even with perfect credentials** — not merely
+  that one error message was unreachable.
+
+The HTTP status signal is **inverted** between the two hosts (device:
+always 200; auth: 400 on error) — so error detection cannot key on status
+alone, and cannot key on body shape alone either, since the two hosts'
+body shapes differ. It keys on **which host answered**: `login()`/
+`submitMfa()` always interpret their response as a `WyzeAuthEnvelope`;
+every other method always interprets its response as a `WyzeEnvelope`.
+The auth host's SUCCESS shape (`access_token`/`refresh_token` at the TOP
+LEVEL, not nested under `data`) has never been directly observed — no
+account exists, none will be created — but is corroborated tier (b) by
+reading the community `shauntarves/wyze-sdk` Python source directly; see
+`src/wyze-auth-envelope.ts`'s header comment for exactly what that source
+read established and what remains genuinely unknown.
+
+Both envelopes share the same string-vs-number wire-type defensiveness.
+The finding is explicit that the device host's success (`code == "1"`) is
+a **string**, not the number `1` — a strict `=== 1` check would be
+silently wrong — and gives `1000`/`2001` "without pinning their wire type
+as carefully"; WYZR-15's own auth-host measurement showed `errorCode`
+arriving as the **number** `1000`, not a string, so the same ambiguity
+exists on both hosts. `wyze-envelope.ts`'s `normalizeCode()`/
+`normalizeMsg()` coerce with `String(...)` **once**; `wyze-auth-envelope.ts`
+REUSES `normalizeCode()`/`normalizeMsg()` for `errorCode`/`description`
+rather than adding a second normalizer, so a wire value of the number
+`1000` and the string `"1000"` are handled identically on **either** host.
+This was verified red-first: see the PR body for the exact failing output
+observed when `isSuccessEnvelope`/`isAuthInvalidCredentialsCode` were
+each temporarily broken.
 
 ### The errorCode 1000 trap
 
-A Wyze account created via Google/Apple SSO has no Wyze-native password,
-so the triple-MD5 chain has nothing to hash, and login fails with
-**errorCode 1000 — the same code as a genuinely wrong password**
-(finding §Q3/§Q7). `src/wyze-errors.ts`'s
-`wyzeInvalidCredentialsOrSsoOnlyError()` names **both** possibilities and
-points at the fix: open the Wyze app → Account → Security and look for
-"Change Password" — if it is not there, the account is SSO-only and needs
-a Wyze-specific password set before wyzr can log in.
+`errorCode 1000` from the auth host covers **at least three** distinct,
+indistinguishable-from-the-response-alone causes — WYZR-15's correction of
+an under-count in this project's own earlier belief:
+
+1. A genuinely wrong `email`/`password`/`keyId`/`keySecret`.
+2. A Wyze account created via Google/Apple SSO, which has no Wyze-native
+   password, so the triple-MD5 chain has nothing to hash (finding
+   §Q3/§Q7).
+3. A request the auth host could not read the login key from AT ALL — this
+   project's own pre-WYZR-15 login request (keyid/apikey in the JSON body
+   instead of headers) is a confirmed real example: it produced this exact
+   errorCode with genuinely correct credentials.
+
+`src/wyze-errors.ts`'s `wyzeInvalidCredentialsOrSsoOnlyError()` originally
+named only the first two, on the belief that they were the only two —
+**that message would have sent an operator to change a password that was
+never the problem**, in exactly the (3) case this project itself
+triggered. It now names all three and points at the fix for (2): open the
+Wyze app → Account → Security and look for "Change Password" — if it is
+not there, the account is SSO-only and needs a Wyze-specific password set
+before wyzr can log in.
+
+**This message was unreachable against the real API before WYZR-15** — a
+well-formed `credentials.json` with placeholder credentials produced
+`"Wyze API returned an error (code undefined)."`, exit `api_error` (6),
+instead. Verified end-to-end through the CLI, both before and after the
+fix, with a real (placeholder-credentialed) call to the live auth host —
+see the PR body for the before/after transcript.
+
+**What that before/after run proves, and what it does NOT.** A
+placeholder-credentialed login is ALWAYS wrong credentials (cause 1 or
+3 above) — errorCode 1000 cannot tell those two apart, which is exactly
+this trap's own subject. So the after-run proves the **decode** is fixed
+(1000 now correctly reaches this message and exit 3, instead of "code
+undefined" and exit 6) — real and worth having — but it is **strictly
+less** than proof the **request shape** is now correct, since a
+STILL-malformed request would produce the identical observable result.
+Only a login that actually SUCCEEDS — which needs a real account — can
+tell those apart; see "Live-device coverage" below for what did and did
+not get checked that way for this change.
 
 ### Token discipline
 
@@ -690,12 +814,17 @@ mac-matches-one/name-matches-another ambiguity as its own dedicated test.
 
 ### Device state: P3/P5 decoding — a closed, boolean-rejecting whitelist
 
-Per the finding's §Q4, `P3` (power) and `P5` (reachability) are both wire-
-encoded as an **integer**, `0` or `1` — never a native JSON boolean.
-`src/plug.ts`'s `decodeP3()`/`decodeP5()` accept **exactly** the number
-`1`/`0` and the string `"1"`/`"0"` (the string form defensive, mirroring
-`src/devices.ts`'s `classifyState()` precedent). **Everything else,
-including a native JSON `true`/`false`, decodes to `"unknown"`
+The finding's §Q4 originally described `P3` (power) and `P5`
+(reachability) as both wire-encoded as an **integer**, `0` or `1` — read
+from the community `wyze-sdk`'s own internal Python type declaration.
+**WYZR-15's live-account measurement CORRECTED this**: a real
+`get_property_list` read-back showed both wire-encoded as the **STRING**
+`"1"`/`"0"` — the SDK's `int` typing describes its own Python-side
+representation, not what actually crosses the wire. `src/plug.ts`'s
+`decodeP3()`/`decodeP5()` accept **exactly** the string `"1"`/`"0"` (the
+CONFIRMED wire form) and the number `1`/`0` (kept, defensively, from the
+original belief — harmless to keep tolerating on READ). **Everything
+else, including a native JSON `true`/`false`, decodes to `"unknown"`
 (`P3`)/`null` (`P5`) — REJECTED, never helpfully coerced.** A boolean is
 precisely the silently-wrong wire assumption the finding warns about;
 degrading loudly to "unknown" on a wrong guess about the wire type is safer
@@ -703,6 +832,15 @@ than a confident misread. `test/unit/plug.test.ts` ships a dedicated
 boolean-rejection test for each, run red-first (see the PR body for the
 actual red output observed when `decodeP3`/`decodeP5` were temporarily
 changed to coerce `true`/`false`).
+
+The WRITE side did not get the same luck: `wyzr` previously sent `P3` as a
+bare JSON integer under the field name `value` — WYZR-15's measurement
+showed the real `set_property` call needs the field named **`pvalue`**,
+carrying a **STRING** (`"1"`/`"0"`), and REJECTS the old shape outright.
+`src/transport.ts`'s `SetPropertyRequest.value` is now typed `"0" | "1"`,
+a string literal union — sending a number or boolean is a compile error,
+not just a runtime mistake to catch in review, the same discipline the
+read side has always had.
 
 `src/plug.ts`'s `readPlugState()` reads `P3` and `P5` out of a
 `get_property_list` response **independently of one another — reachability
@@ -852,10 +990,11 @@ it meant this repo's own happy-path fixture could never exercise the
 online/offline distinction this story depends on getting right. It now
 takes an array of per-device overrides (`FakeDeviceListEntry`), with
 `FAKE_PLUG_ONLINE`/`FAKE_PLUG_OFFLINE`/`FAKE_PLUG_STATE_UNKNOWN` presets;
-`fakePropertyListEnvelope(props)` and `fakeSetPropertyEnvelope()` are new,
-equally synthetic, siblings for `get_property_list`/`set_property`. Every
-one of these remains SYNTHETIC — constructed from the finding's
-description of the shape, never a capture of real Wyze traffic.
+`fakePropertyListEnvelope(props)` and `fakeSetPropertyEnvelope()` are new
+siblings for `get_property_list`/`set_property`. Every one of these is
+tagged `PROVENANCE: ASSUMED` in its own doc comment (see "The fake's
+responses are tiered by provenance" above) — constructed from the
+finding's description of the shape, never a capture of real Wyze traffic.
 
 ### This command has never been exercised against a real Wyze account or device
 
@@ -878,15 +1017,26 @@ immediately below for the full statement this applies to.
 
 ## Live-device coverage
 
-**Nothing in this repo has ever been exercised against a real Wyze account
-or device.** `src/transport-http.ts` has never made a real HTTP call to
-`auth-prod.api.wyze.com` or `api.wyzecam.com`; `src/app-identity.ts`'s
-minted key has never been sent to Wyze; `src/totp.ts`'s math is proven
-against RFC 6238's own vectors but has never answered a real challenge;
-the MFA-detection field names and the `submitMfa`/`getObjectList` request
-shapes are this author's inference, not a confirmed contract; the token
-lifetimes and refresh behavior are only as documented in the
-finding, at reduced confidence, never observed directly.
+**Nothing in this repo has ever been exercised against a real Wyze
+ACCOUNT or DEVICE, and that remains true after WYZR-15.** What changed:
+WYZR-15 made a HANDFUL of deliberate, manual, placeholder-credentialed
+calls to the real `auth-prod.api.wyze.com` (login) and `api.wyzecam.com`
+(`get_property_list`) hosts — see `docs/wyze-no-credential-probing.md` —
+specifically to observe their **error** envelope shapes, which need no
+account at all. That is real coverage of those error shapes (now tier
+(a); see `src/wyze-envelope.ts`/`src/wyze-auth-envelope.ts`'s header
+comments) and is the reason `wyzeInvalidCredentialsOrSsoOnlyError()` is
+reachable at all now (see "The errorCode 1000 trap" above). It is NOT
+coverage of anything requiring a real account: no successful login has
+ever been observed (the auth host's SUCCESS/MFA shapes stay tier (d),
+corroborated tier (b) by a source read, never measured); `src/totp.ts`'s
+math is proven against RFC 6238's own vectors but has never answered a
+real challenge; `src/app-identity.ts`'s minted key has been SENT (as part
+of every probe above) but whether Wyze actually HONORS a value it never
+issued remains unverified, since every probe so far has failed for an
+unrelated reason (bad credentials) before that could be distinguished;
+and the token lifetimes and refresh behavior are only as documented in
+the finding, at reduced confidence, never observed directly.
 
 **Neither `wyzr devices list` nor `wyzr plug status|on|off` adds any
 exception to any of this.** `devices list`'s `mac`/`product_model`/

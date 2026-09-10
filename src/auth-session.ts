@@ -14,27 +14,29 @@
 // (finding §3, explicit unknown #2) — this module's TOTP math is proven
 // correct against RFC 6238's own vectors (src/totp.ts), but the plumbing
 // that DETECTS a challenge and the shape it expects from Wyze's wire
-// format are this author's inference (tier (d); see
-// src/wyze-envelope.ts's detectMfaChallenge() comment) and have never run
-// against a real challenge.
+// format are this author's inference (tier (d), corroborated tier (b) by
+// a community-SDK source read — see src/wyze-auth-envelope.ts's header
+// comment and its detectAuthMfaChallenge()) and have never run against a
+// real challenge.
 
 import type { Credentials } from "./credentials.ts";
 import { registerSecret } from "./redact.ts";
 import type { WyzeTransport } from "./transport.ts";
 import { totpFromBase32Secret } from "./totp.ts";
 import {
-  extractTokens,
-  isAccessTokenExpired,
-  isInvalidCredentialsCode,
-  isSuccessEnvelope,
-  detectMfaChallenge,
+  detectAuthMfaChallenge,
+  extractAuthTokens,
+  isAuthInvalidCredentialsCode,
+  isAuthSuccessEnvelope,
   type MfaChallenge,
-  type WyzeEnvelope,
-} from "./wyze-envelope.ts";
+  type WyzeAuthEnvelope,
+} from "./wyze-auth-envelope.ts";
+import { extractTokens, isAccessTokenExpired, isSuccessEnvelope, type WyzeEnvelope } from "./wyze-envelope.ts";
 import { wyzeTripleMd5 } from "./wyze-auth-hash.ts";
 import {
   wyzeAccessTokenRefreshLoopError,
   wyzeGenericApiError,
+  wyzeGenericAuthApiError,
   wyzeInvalidCredentialsOrSsoOnlyError,
   wyzeMalformedSuccessError,
   wyzeMfaSmsUnsupportedError,
@@ -46,20 +48,15 @@ import {
   wyzeRefreshWithoutLoginError,
 } from "./wyze-errors.ts";
 
-/** Injectable so tests can supply a deterministic nonce and clock instead
- * of the wall clock — the finding does not document a required nonce
- * FORMAT, only that one is sent (tier (b)); the default below (current
- * epoch millis as a string) is this author's own reasonable choice, not a
- * confirmed Wyze requirement. */
+/** `now` is injectable so tests can supply a deterministic clock for TOTP
+ * generation. No `nonce` dependency — WYZR-15's live-account measurement
+ * showed the login body carries no nonce at all (see
+ * src/transport.ts's LoginRequest doc comment); this project's earlier,
+ * never-confirmed belief that one was required is retired with it. */
 export interface AuthSessionDeps {
   transport: WyzeTransport;
   credentials: Credentials;
-  nonce?: () => string;
   now?: () => number;
-}
-
-function defaultNonce(): string {
-  return String(Date.now());
 }
 
 export class WyzeAuthSession {
@@ -77,11 +74,10 @@ export class WyzeAuthSession {
     const envelope = await this.deps.transport.login({
       email: this.deps.credentials.email,
       passwordHash: this.hashedPassword(),
-      nonce: this.currentNonce(),
       keyId: this.deps.credentials.keyId,
       keySecret: this.deps.credentials.keySecret,
     });
-    await this.handleLoginEnvelope(envelope);
+    await this.handleAuthEnvelope(envelope);
   }
 
   /** The triple-MD5 password hash, registered for redaction the moment it
@@ -96,26 +92,29 @@ export class WyzeAuthSession {
   }
 
   /**
-   * Interprets a login response. MFA-challenge detection is checked
-   * BEFORE `code`-based success/failure interpretation — deliberately: the
-   * finding does not establish what `code` value accompanies a challenge,
-   * so gating on `data`'s shape instead keeps this correct regardless of
-   * that unresolved unknown (see wyze-envelope.ts's detectMfaChallenge()).
+   * Interprets a login/submitMfa response — BOTH go to the auth host, so
+   * this reads the AUTH envelope (src/wyze-auth-envelope.ts), never the
+   * device host's WyzeEnvelope (see that module's header comment for why
+   * they are no longer the same type). MFA-challenge detection is checked
+   * BEFORE error/success interpretation — deliberately: neither the
+   * finding nor the source reading behind wyze-auth-envelope.ts pins down
+   * what accompanies a challenge, so gating on `mfa_options`'s shape
+   * instead keeps this correct regardless of that unresolved unknown.
    */
-  private async handleLoginEnvelope(envelope: WyzeEnvelope): Promise<void> {
-    const challenge = detectMfaChallenge(envelope);
+  private async handleAuthEnvelope(envelope: WyzeAuthEnvelope): Promise<void> {
+    const challenge = detectAuthMfaChallenge(envelope);
     if (challenge) {
       await this.answerMfaChallenge(challenge);
       return;
     }
-    if (isSuccessEnvelope(envelope)) {
-      this.storeTokens(envelope);
+    if (isAuthSuccessEnvelope(envelope)) {
+      this.storeAuthTokens(envelope);
       return;
     }
-    if (isInvalidCredentialsCode(envelope)) {
+    if (isAuthInvalidCredentialsCode(envelope)) {
       throw wyzeInvalidCredentialsOrSsoOnlyError();
     }
-    throw wyzeGenericApiError(envelope);
+    throw wyzeGenericAuthApiError(envelope);
   }
 
   private async answerMfaChallenge(challenge: MfaChallenge): Promise<void> {
@@ -141,7 +140,6 @@ export class WyzeAuthSession {
     const envelope = await this.deps.transport.submitMfa({
       email: this.deps.credentials.email,
       passwordHash: this.hashedPassword(),
-      nonce: this.currentNonce(),
       keyId: this.deps.credentials.keyId,
       keySecret: this.deps.credentials.keySecret,
       verificationId: challenge.verificationId,
@@ -149,19 +147,35 @@ export class WyzeAuthSession {
       verificationCode: code,
     });
 
-    // Deliberately NOT re-entering handleLoginEnvelope (which would check
+    // Deliberately NOT re-entering handleAuthEnvelope (which would check
     // for another MFA challenge): one challenge-and-answer round only,
     // never a loop.
-    if (isSuccessEnvelope(envelope)) {
-      this.storeTokens(envelope);
+    if (isAuthSuccessEnvelope(envelope)) {
+      this.storeAuthTokens(envelope);
       return;
     }
-    if (isInvalidCredentialsCode(envelope)) {
+    if (isAuthInvalidCredentialsCode(envelope)) {
       throw wyzeInvalidCredentialsOrSsoOnlyError();
     }
-    throw wyzeGenericApiError(envelope);
+    throw wyzeGenericAuthApiError(envelope);
   }
 
+  /** Auth-host counterpart of storeTokens() below — used by login()/the
+   * MFA-answer path only (see handleAuthEnvelope()). */
+  private storeAuthTokens(envelope: WyzeAuthEnvelope): void {
+    let tokens: { accessToken: string; refreshToken: string };
+    try {
+      tokens = extractAuthTokens(envelope);
+    } catch (cause) {
+      throw wyzeMalformedSuccessError(cause);
+    }
+    this.setTokens(tokens);
+  }
+
+  /** Device-host counterpart of storeAuthTokens() above — used by
+   * refresh() only, since refreshToken() hits the device host (see
+   * src/transport.ts's WyzeTransport doc comment) and its response keeps
+   * the device host's own {code,msg,data} shape. */
   private storeTokens(envelope: WyzeEnvelope): void {
     let tokens: { accessToken: string; refreshToken: string };
     try {
@@ -169,6 +183,10 @@ export class WyzeAuthSession {
     } catch (cause) {
       throw wyzeMalformedSuccessError(cause);
     }
+    this.setTokens(tokens);
+  }
+
+  private setTokens(tokens: { accessToken: string; refreshToken: string }): void {
     // Registered the moment they are received into this session — before
     // returning control to any caller that might print something.
     registerSecret(tokens.accessToken);
@@ -212,10 +230,11 @@ export class WyzeAuthSession {
     );
   }
 
-  /** WYZR-13's addition, for `wyzr plug on`/`off`'s write half. `value` is
-   * `0 | 1`, never `boolean` — decision (A) enforced at this call's own
-   * signature, not just downstream. */
-  async setProperty(mac: string, model: string, pid: string, value: 0 | 1): Promise<unknown> {
+  /** WYZR-13's addition, REVISED by WYZR-15: `value` is `"0" | "1"`, a
+   * STRING literal union, never `boolean` and never a bare number —
+   * decision (A), revised (see src/transport.ts's SetPropertyRequest doc
+   * comment), enforced at this call's own signature, not just downstream. */
+  async setProperty(mac: string, model: string, pid: string, value: "0" | "1"): Promise<unknown> {
     return this.callAuthenticated((accessToken) =>
       this.deps.transport.setProperty({ accessToken, mac, model, pid, value }),
     );
@@ -245,9 +264,5 @@ export class WyzeAuthSession {
       return this.callAuthenticated(call, true);
     }
     throw wyzeGenericApiError(envelope);
-  }
-
-  private currentNonce(): string {
-    return (this.deps.nonce ?? defaultNonce)();
   }
 }
