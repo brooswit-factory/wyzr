@@ -45,10 +45,22 @@
 // tokens/credentials sent alongside them, which remain secrets and stay
 // covered by src/redact.ts.
 //
-// This does NOT resurrect src/app-identity.ts's `x-api-key` header: no
-// measured working request (auth-host login, or any device-host call)
-// carries that header, so it is retired outright, not migrated — see
-// src/transport-http.ts's header comment for where it used to be sent.
+// This does NOT resurrect src/app-identity.ts's `x-api-key` header — but
+// STATE WHY PRECISELY, per this same file's own "measured vs untested"
+// discipline above: the two hosts are NOT in the same evidentiary state.
+// The auth host's working login request was measured with its FULL header
+// set (`keyid`, `apikey`, `content-type`) — no `x-api-key` among them —
+// so "the working login doesn't carry it" is a genuine observation. The
+// device host's relayed measurement recorded a BODY only; it never
+// recorded that request's headers at all, in either direction. "No
+// measured working device-host call carries that header" would be the
+// same shape of overclaim this file just spent a paragraph warning
+// against (absence of a record misread as a record of absence) — so this
+// file does NOT claim that. The header is retired for the device host as
+// the DEFENSIBLE DEFAULT (an unobserved header nobody has evidence for is
+// not something to keep sending on a guess), not because any request was
+// observed to work without it. See src/transport-http.ts's header comment
+// for where it used to be sent.
 
 import { createHash } from "node:crypto";
 

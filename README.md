@@ -344,9 +344,19 @@ The finding (§Q3) originally described a **second, separate,
 non-user-specific key**, sent as `x-api-key`, hardcoded into the
 community SDK's own source to identify the calling app/library. wyzr
 minted its own equivalent (`src/app-identity.ts`, now removed) rather than
-copying the SDK's embedded value. WYZR-15's live-account measurement found
-that **no working request — auth-host login, or any device-host call —
-sends this header at all**; it is gone, not migrated.
+copying the SDK's embedded value. The header is gone, not migrated — but
+the two hosts are NOT in the same evidentiary state, and it matters which:
+the relayed **auth-host** measurement enumerated the working login
+request's *full header set* (`keyid`, `apikey`, `content-type`) — no
+`x-api-key` among them — so "the working login doesn't carry it" is a
+genuine observation. The relayed **device-host** measurement recorded a
+*body* only; it never recorded that request's headers at all, in either
+direction, so "no working device-host call carries this header" would
+itself be exactly the kind of one-step-past-the-evidence claim this
+section warns about below — this project does NOT claim that. The header
+is retired for the device host as the defensible default (an unobserved
+header nobody has evidence for is not something to keep sending on a
+guess), not because any request was observed to work without it.
 
 What the device host (`api.wyzecam.com`) ACTUALLY requires instead is a
 much larger **"standard body"** merged into every call's JSON payload —
