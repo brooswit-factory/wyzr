@@ -276,6 +276,30 @@ describe("run — plug command routing (subcommand/argument validation only; the
   });
 });
 
+describe("run — wedge command routing (subcommand validation only; the real wiring is src/cli-wedge.ts's own tests, against fake probes)", () => {
+  // Exercises defaultDispatch()'s own `command === "wedge"` branch (the one
+  // line `dispatchWedge(rest, opts.json)` in src/cli.ts, WYZR-17's own
+  // uncovered wiring line) through the full run() boundary rather than
+  // calling dispatchWedge() directly the way test/unit/cli-wedge.test.ts
+  // does — a missing/unknown subcommand throws before defaultWedgeStatusDeps'
+  // real probes/config are ever touched, so this stays zero-network.
+  test("`wedge` with no subcommand is a Usage error, not a network attempt", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["wedge"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy).toHaveBeenCalledWith("Usage: wyzr wedge status [--json]");
+    errSpy.mockRestore();
+  });
+
+  test("`wedge frobnicate` (an unknown subcommand) is a Usage error naming it", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["wedge", "frobnicate"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy).toHaveBeenCalledWith("Unknown wedge subcommand: frobnicate");
+    errSpy.mockRestore();
+  });
+});
+
 describe("run — the try/catch exit-code boundary", () => {
   test("a CliError from dispatch maps to its own exit code, human mode", async () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});

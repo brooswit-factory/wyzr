@@ -986,14 +986,19 @@ and no undo. That is why every design choice below leans toward refusing.
 
 ### The proof standard
 
-A wedge is **PROVEN** only when BOTH hold:
+A wedge is **PROVEN** only when ALL of these hold:
 
 1. **At least two INDEPENDENT outside instruments are silent together.**
    "Outside" means observed from somewhere other than the suspect box.
    Independent means their silence is not attributable to one shared
    cause — see "The independence trap" below; this is the hardest rule
    here and the one most likely to be gotten wrong.
-2. **Every configured direct path is confirmed dead.** ssh and tunnel
+2. **The local-connectivity control was successfully read and reports
+   healthy.** This is an unconditional PRECONDITION of PROVEN once two
+   instruments are silent — never merely a tiebreaker that only matters
+   for instruments that happen to declare a shared dependency. See "The
+   independence trap" and "The local-connectivity control" below for why.
+3. **Every configured direct path is confirmed dead.** ssh and tunnel
    ping today — see "Direct paths" below for what "confirmed dead"
    actually requires.
 
@@ -1027,6 +1032,22 @@ its own, never satisfies rule 1 — `src/wedge.ts`'s
 unit-tested directly (`test/unit/wedge.test.ts`) with a case built so that
 naively counting the pair would produce PROVEN and the correct engine must
 not.
+
+**The control is a precondition of PROVEN, not merely a tiebreaker for
+instruments that happen to declare a shared dependency (WYZR-22).** In
+this architecture "no declared dependency in common" is never actual proof
+of "no shared cause": every instrument `wyzr` can observe is probed from
+the manager machine, over that machine's one internet connection, whether
+or not an instrument's own `dependsOn` happens to say so. So
+`evaluateWedge()` checks `localControl.outcome === "healthy"` BEFORE it
+ever looks at what any pair of silent instruments declared — whenever two
+or more instruments are silent and the control was not successfully read
+as healthy, the verdict is `INCONCLUSIVE_BY_SHARED_CAUSE` regardless of
+whether their dependency sets overlap. Only once the control is confirmed
+healthy does the declared-dependency computation above run, to decide
+which pairs, if any, count as independent. (A single silent instrument
+never reaches this check at all — see "The proof standard" above: one
+silent probe is a network blip, not a shared-cause question.)
 
 ### The instruments
 

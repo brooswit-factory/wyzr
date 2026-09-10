@@ -68,14 +68,14 @@ describe("evaluateWedge — PROVEN", () => {
     expect(result.verdict).toBe(WedgeVerdict.Proven);
   });
 
-  test("instruments with NO shared dependency are independent even without a healthy control", () => {
+  test("instruments with NO shared dependency still require a healthy control — it is a precondition of PROVEN, not a shared-dependency tiebreaker", () => {
     const result = evaluateWedge(
       provenInput({
         instruments: [
           instrument({ name: "jira", dependsOn: ["jira-cloud"] }),
           instrument({ name: "github", dependsOn: ["github-cloud"] }),
         ],
-        localControl: localControl({ outcome: "error", confirms: [] }),
+        localControl: localControl({ outcome: "healthy", confirms: [] }),
       }),
     );
     expect(result.verdict).toBe(WedgeVerdict.Proven);
@@ -128,6 +128,51 @@ describe("evaluateWedge — both silent, local-connectivity control FAILING: INC
       expect(result.verdict).not.toBe(WedgeVerdict.Proven);
     });
   }
+});
+
+describe("evaluateWedge — WYZR-22: the local-connectivity control is a PRECONDITION of PROVEN, not a shared-dependency tiebreaker", () => {
+  // The reviewer's exact repro (WYZR-22): two silent instruments with
+  // DISJOINT declared dependencies — the exact shape that used to take
+  // computePairIndependence()'s "no declared dependency in common" branch
+  // and skip the shared-cause check entirely — plus a dead direct path.
+  // Before this fix this returned PROVEN regardless of `localControl`; now
+  // it must return INCONCLUSIVE_BY_SHARED_CAUSE whenever the control was
+  // not successfully read as healthy, and PROVEN never becomes reachable
+  // from this shape by widening it further.
+  for (const failing of ["unconfigured", "error", "timeout"] as const) {
+    test(`disjoint dependencies, dead direct path, control "${failing}": INCONCLUSIVE_BY_SHARED_CAUSE, never PROVEN`, () => {
+      const result = evaluateWedge(
+        provenInput({
+          instruments: [
+            instrument({ name: "a", dependsOn: ["dep-a"] }),
+            instrument({ name: "b", dependsOn: ["dep-b"] }),
+          ],
+          localControl: localControl({ outcome: failing, confirms: [] }),
+        }),
+      );
+      expect(result.verdict).toBe(WedgeVerdict.InconclusiveBySharedCause);
+      expect(result.verdict).not.toBe(WedgeVerdict.Proven);
+      expect(result.independentPairFound).toBeNull();
+      expect(result.independencePairs).toEqual([]);
+      expect(
+        result.reasons.some((r) => r.includes("regardless of their declared dependency sets")),
+      ).toBe(true);
+      expect(result.reasons.some((r) => r.includes("shared cause ruled out"))).toBe(false);
+    });
+  }
+
+  test("< 2 silent instruments with disjoint dependencies and a failing control is still NOT_PROVEN, never INCONCLUSIVE — a single silent probe is a network blip, not a shared-cause question", () => {
+    const result = evaluateWedge(
+      provenInput({
+        instruments: [
+          instrument({ name: "a", dependsOn: ["dep-a"] }),
+          instrument({ name: "b", dependsOn: ["dep-b"], lastSeenAt: NOW - 1000 }),
+        ],
+        localControl: localControl({ outcome: "unconfigured", confirms: [] }),
+      }),
+    );
+    expect(result.verdict).toBe(WedgeVerdict.NotProven);
+  });
 });
 
 describe("evaluateWedge — both silent, control healthy, but a direct path still ALIVE is REFUSED", () => {
@@ -202,10 +247,11 @@ describe("evaluateWedge — control-plane liveness is recorded but structurally 
 
 describe("evaluateWedge — an instrument that THROWS/TIMES OUT/is UNCONFIGURED never silently vanishes from the quorum", () => {
   test("dropping a degraded instrument would leave one probe looking like two — assert refusal, not proof", () => {
-    // Three instruments configured; only ONE is genuinely, affirmatively silent. A naive
+    // Two instruments configured; only ONE is genuinely, affirmatively silent. A naive
     // implementation that simply filtered out non-"observed" readings before counting could, with a
-    // sloppy length check elsewhere, mistake "3 instruments minus 1 bad one = 2" for a quorum. This
-    // input is built so THAT mistake would produce PROVEN; the correct engine must not.
+    // sloppy length check elsewhere, mistake "2 instruments minus 1 bad one = 1 looking like a quorum
+    // of 2" — i.e. treat the single genuinely-silent instrument as if it satisfied the >=2 requirement
+    // on its own. This input is built so THAT mistake would produce PROVEN; the correct engine must not.
     for (const outcome of ["error", "timeout", "unconfigured"] as const) {
       const result = evaluateWedge(
         provenInput({
