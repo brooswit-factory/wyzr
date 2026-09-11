@@ -19,6 +19,8 @@ import { runPlugStatus, runPlugWrite } from "./cli-plug.ts";
 import { defaultWedgeStatusDeps, runWedgeStatus, type WedgeStatusDeps } from "./cli-wedge.ts";
 import { defaultRecoveryStatusDeps, runRecoveryStatus, type RecoveryStatusDeps } from "./cli-recovery.ts";
 import { defaultCycleCommandDeps, parseCycleArgs, runCycleCommand, type CycleCommandDeps } from "./cli-cycle.ts";
+import { runDoctorCommand } from "./cli-doctor.ts";
+import { defaultDoctorRunnerDeps, type DoctorRunnerDeps } from "./doctor-runner.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
 import { printError, printHuman, printJsonError } from "./output.ts";
@@ -232,6 +234,22 @@ export async function dispatchCycle(
   return runCycleCommand(deps, device, json, options);
 }
 
+/** `doctor` has no subcommand at all, and no arguments beyond `--json` —
+ * READ-ONLY, structurally: see src/doctor-runner.ts's own top comment for
+ * why it never throws for a diagnostic finding, and
+ * test/unit/doctor-imports.test.ts/test/unit/doctor-no-write.test.ts for
+ * the two structural checks proving no write path is reachable from here. */
+export async function dispatchDoctor(
+  rest: string[],
+  json: boolean,
+  deps: DoctorRunnerDeps = defaultDoctorRunnerDeps,
+): Promise<number> {
+  if (rest.length > 0) {
+    throw new CliError(`Usage: wyzr doctor [--json] — unexpected argument(s): ${rest.join(" ")}`, ExitCode.Usage);
+  }
+  return runDoctorCommand(deps, json);
+}
+
 const defaultDispatch: Dispatch = async (command, rest, opts) => {
   if (command === "devices") {
     return dispatchDevices(rest, opts.json);
@@ -247,6 +265,9 @@ const defaultDispatch: Dispatch = async (command, rest, opts) => {
   }
   if (command === "cycle") {
     return dispatchCycle(rest, opts.json);
+  }
+  if (command === "doctor") {
+    return dispatchDoctor(rest, opts.json);
   }
   throw new CliError(`Unknown command: ${command}`, ExitCode.Usage);
 };
@@ -276,7 +297,12 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "                          Gated power cycle: off, wait, never-give-up on, then a recovery\n" +
         "                          verdict. DESTRUCTIVE. --dry-run is the only way to exercise this\n" +
         "                          verb's judgment without cutting power. See README's \"wyzr cycle\"\n" +
-        "                          section before ever running this for real.",
+        "                          section before ever running this for real.\n" +
+        "  doctor                  Is this install actually able to pull the lever? Read-only preflight:\n" +
+        "                          config, credentials, cloud reachability, both configured plugs, the\n" +
+        "                          outside instruments, and the wrong-box guard's verdict about THIS\n" +
+        "                          machine. Structurally incapable of switching a plug — see README's\n" +
+        "                          \"wyzr doctor\" section.",
     );
     return ExitCode.Ok;
   }

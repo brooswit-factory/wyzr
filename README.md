@@ -106,14 +106,19 @@ stories — the numbers already assigned here never change or get reused.
 | 24   | `cycle_recovery_inconclusive` | `wyzr cycle` only: the composed recovery verdict was INCONCLUSIVE. |
 | 25   | `cycle_recovery_unconfigured` | `wyzr cycle` only: the composed recovery verdict was UNCONFIGURED. |
 | 26   | `config_invalid` | The single configuration surface (`src/config.ts`'s `loadWyzrConfig()`, WYZR-20/WYZR-28): the config file is missing, unreadable (over-permissive directory or file mode), unparseable, has an unknown/missing/mistyped field, has a present-but-incomplete optional section, or configures the fleet plug and the safe plug as the same device. ONE code for all of these — see "Configuration" under `wyzr wedge status` below for why, mirroring `credentials_invalid`'s own precedent; `CliError.reason` carries the finer detail (`config_missing`, `config_file_mode`, `config_field_missing`, `config_plug_conflation`, ...). |
+| 27   | `doctor_not_ready` | `wyzr doctor` only: at least one check affirmatively FAILED — see "`wyzr doctor`" below. |
+| 28   | `doctor_inconclusive` | `wyzr doctor` only: nothing failed, but at least one attempted check could not be read. |
+| 29   | `doctor_unconfigured` | `wyzr doctor` only: nothing failed and nothing was unreadable — the only gaps are things nobody ever pointed anywhere (no `config.json` at all, or an optional section left out). |
 
 Codes 8/9/10 were added by `wyzr plug status|on|off` (WYZR-13); 11/12 were
 added by `wyzr wedge status` (WYZR-17); 13/14/15/16 were added by `wyzr
 recovery status` (WYZR-25); 17-25 were added by `wyzr cycle` (WYZR-19/
-WYZR-27); 26 was added by the config file (WYZR-20/WYZR-28) — all
-appending only, never renumbering or reusing an existing code. 0–7 are
-unchanged from earlier stories. `wyzr cycle`'s own success (cycled and
-recovered) reuses exit `0`, by symmetry with `recovery status`'s RECOVERED.
+WYZR-27); 26 was added by the config file (WYZR-20/WYZR-28); 27/28/29 were
+added by `wyzr doctor` (WYZR-29) — all appending only, never renumbering or
+reusing an existing code. 0–7 are unchanged from earlier stories. `wyzr
+cycle`'s own success (cycled and recovered) reuses exit `0`, by symmetry
+with `recovery status`'s RECOVERED — `wyzr doctor`'s own READY verdict does
+the same.
 
 ### Two classes of non-zero exit code
 
@@ -170,6 +175,14 @@ configured wrong-box target — is an ordinary Usage error (`2`)**, not a new
 outcome code: it is "you invoked the CLI wrong," the same class as a
 missing `<device>` argument, not a claim about the gate, the box, or the
 plug.
+
+**Codes `27`/`28`/`29` are OUTCOME codes too, on the same reasoning.** `wyzr
+doctor` runs every check it can and is reporting exactly what it
+observed — NOT_READY, INCONCLUSIVE, or UNCONFIGURED are the command
+*working*, not failing. It prints its normal, documented evidence-trail
+payload (see "`wyzr doctor`" below) to stdout and returns the code;
+`--json` mode never wraps any of these in the `{"error": {...}}` shape
+either.
 
 **Neither `9` nor `10` is a claim that a write did nothing.** `9` on the
 write path means the write was accepted by Wyze AND its resulting state
@@ -2814,6 +2827,223 @@ something powers.** A green gate here proves this code does what THIS
 REPO believes the Wyze write API does; it cannot prove that belief is
 correct. That first real write is WYZR-20's own deliberately staged
 rehearsal, not this one.
+
+## `wyzr doctor`
+
+Answers exactly one question: **is this install actually able to pull the
+lever?** Read-only, structurally — see "Structurally incapable of switching
+a plug" below. Wired to the config `wyzr wedge status`/`recovery
+status`/`cycle` already read (WYZR-20/WYZR-28); no subcommand, no flags
+beyond `--json`.
+
+```sh
+wyzr doctor [--json]
+```
+
+### What it reports, each as its own row
+
+- **`config`** — present, correctly permissioned, and complete. `--json`
+  names which OPTIONAL sections (`tunnelPing`, `jira`, `github`,
+  `controlPlane`, `recovery.daemon`, `recovery.fleetAudit`,
+  `cycle.handRestoreCommand`) are configured, as booleans — never a
+  configured value. No config file at all reads `not-configured` (a fresh
+  install, before setup); a present-but-broken file (bad permissions,
+  malformed JSON, an incomplete section, conflated plugs) reads `fail` — a
+  DIFFERENT state, on purpose (see "The honesty split" below).
+- **`credentials`** — present and correctly permissioned, same
+  presence/position/permission discipline, same two-state split (missing
+  vs. broken). Never a fragment of `email`/`password`/`keyId`/`keySecret`/
+  `totpSecret` in any row this command produces.
+- **`cloud` (a login attempt)** — did logging in with the configured
+  credentials succeed? This command NEVER diagnoses WHY a login attempt
+  failed — see "It never diagnoses why authentication failed" below.
+- **The target plugs (`fleetPlug`/`safePlug`)**, each reported as TWO
+  independent facts: `resolvable` (does this mac appear in the account's
+  own device list?) and `readable` (does a fresh P3/P5 read decode?). Kept
+  separate deliberately — a plug can be resolvable but momentarily
+  unreadable, or (in principle) readable while a stale/paginated device
+  list missed it; collapsing the two would hide exactly that kind of
+  disagreement.
+- **The outside instruments** (`jira-activity`/`github-activity`) —
+  configured or not, and reachable or not, by their canonical names (the
+  same names `wyzr wedge status`/`recovery status` already report, so a
+  reader sees ONE consistent instrument identity across every command that
+  touches it).
+- **The wrong-box guard's verdict about THIS machine** — run for real
+  (`src/cycle-wrong-box.ts`'s `runWrongBoxGuard()`, the exact function
+  `wyzr cycle` itself calls, reused rather than re-implemented) and
+  reported verbatim: `not_target`/`is_target`/`inconclusive` plus its full
+  evidence trail. Run on the manager box, this should read `not_target` —
+  an `is_target` result here is the single most consequential thing this
+  command can discover, and it is never buried inside a generic
+  "could not look."
+- **What remains unproven** — see "The honesty split" below; this command
+  states plainly what its own composition does and does not stand on,
+  every run, not just on request.
+
+### Three hard rules on what it may say
+
+1. **"Could not look" is neither a pass nor a fail.** Every row above uses
+   this repo's own four-way vocabulary (`pass`/`fail`/`could-not-look`/
+   `not-configured`, `src/recovery.ts`'s `CheckOutcome`, reused rather than
+   re-invented) — reused all the way up to the command's OWN verdict
+   (`READY`/`NOT_READY`/`INCONCLUSIVE`/`UNCONFIGURED`), which follows the
+   exact same precedence `wyzr recovery status` already established: a
+   FAIL anywhere outranks a could-not-look, which outranks a
+   not-configured gap, which outranks a clean READY.
+
+   **The propagation rule this command adds on top, which `recovery
+   status` never needed:** this command's checks genuinely NEST — no
+   credentials means no login attempt is possible, no config means no plug
+   identity is known — where `recovery status`'s five checks are each
+   independently read over the network with no shared prerequisite chain.
+   A check blocked ONLY because an earlier prerequisite was itself never
+   configured reports itself `not-configured` too (nobody pointed it
+   anywhere either); a check blocked because an earlier prerequisite was
+   attempted and BROKE reports itself `could-not-look` (a real, existing
+   problem is in the way, a different fact from "nobody set this up"). See
+   `src/doctor.ts`'s `blockedByPrerequisite()` and its own top comment.
+
+2. **It never diagnoses WHY authentication failed.** A Wyze auth error code
+   cannot be reasoned backwards to a cause — `errorCode 1000` alone covers
+   at least three distinct, indistinguishable causes (see "`wyzr wedge
+   status`"'s credentials section and `src/wyze-errors.ts`'s own comment).
+   This command reports only WHETHER a login attempt succeeded, and relays
+   a failed attempt's thrown message VERBATIM — never re-interpreted, never
+   narrowed to "this looks like a bad password." The same rule `wyzr cycle`
+   already holds itself to for its own precondition failures.
+
+3. **Human output and `--json`** both go through `src/output.ts`, the
+   single output boundary, following this repo's `schemaVersion` contract
+   (currently `1`). Exit codes append from `26` (see "Exit codes" above) —
+   `27`/`28`/`29`, never reordering or reusing an existing entry.
+
+### Structurally incapable of switching a plug
+
+This is the one command in this repo that must READ a plug, so
+`test/unit/recovery-imports.test.ts`'s own property (no import path to the
+transport/auth layer AT ALL) is not available to it — copying that test
+would produce a green signal blind to the failure it exists to catch, since
+this command necessarily imports `src/auth-session.ts`/
+`src/transport-http.ts`/`src/cycle-plug.ts`. **Three different checks
+instead, each blind to what the other two catch:**
+
+- **A compiler-enforced typing pin.** `src/doctor-plug.ts`'s
+  `checkPlugReadable()` is typed to accept only `PlugReader`
+  (`src/cycle-plug.ts`, reused — the exact type `wyzr cycle --dry-run`
+  already relies on), never `PlugWriter`. A `writePower()` call inside a
+  function whose parameter is typed `PlugReader` does not typecheck.
+  Pinned adversarially with a mutation-tested `@ts-expect-error`
+  (`test/unit/doctor-plug.test.ts`): removing the directive (or, as
+  captured, widening the parameter's type to `PlugWriter`) makes
+  `bun run typecheck` fail with `Unused '@ts-expect-error' directive`.
+  **What this CANNOT see:** whether any OTHER file in this command's own
+  dependency tree imports a write-capable module at all — this pin is
+  entirely local to one function's own body.
+- **An import-closure assertion** (`test/unit/doctor-imports.test.ts`,
+  watched RED first by temporarily importing `src/cli-plug.ts`) proving no
+  import path exists from `src/cli-doctor.ts` to `src/cli-plug.ts` (whose
+  `runPlugWrite()` is unconditionally reachable by importing that file at
+  all), `src/cycle-runner.ts`, or `src/cli-cycle.ts` — the modules that
+  actually ORCHESTRATE a live write, as distinct from `src/cycle-plug.ts`
+  itself (which this command legitimately imports for the `PlugReader`
+  type, and which DOES define `writePower` — reachability of a module that
+  merely DEFINES a write method proves nothing; only reachability of a
+  module that WIRES one up matters here). A sanity floor
+  (`reached.size > 15`, plus explicit checks that `auth-session.ts`/
+  `transport-http.ts`/`cycle-plug.ts`/`cycle-wrong-box.ts`/`config.ts` ARE
+  reached) guards against a broken walk passing for the wrong reason.
+  **What this CANNOT see:** a write call reached through something OTHER
+  than a static relative import (dynamic `import()`, a string-built
+  specifier) — none exist in this repo today, but this check would not
+  notice one appearing.
+- **A source-level grep over a DERIVED file set** (`test/unit/doctor-no-write.test.ts`)
+  for a `writePower(`/`.setProperty(` call site, with a line-count floor
+  (>400). **This one was itself the subject of a review finding, fixed in
+  this PR**: it originally scanned a HARDCODED four-file array
+  (`doctor.ts`/`doctor-plug.ts`/`doctor-runner.ts`/`cli-doctor.ts`), which
+  meant a brand-new fifth module reaching `writePower()` was invisible to
+  it — measured live: a `src/doctor-extra.ts` exporting a `PlugWriter`-typed
+  function that calls `plug.writePower("0")`, imported from
+  `src/doctor-runner.ts`, passed typecheck AND all three checks (833 pass
+  / 0 fail) before the fix. **The fix derives the scanned set from the same
+  import-closure walk `test/unit/doctor-imports.test.ts` performs from
+  `src/cli-doctor.ts`**, excluding only `src/auth-session.ts`/
+  `src/cycle-plug.ts` (measured to be the entire set of legitimate
+  `writePower`/`setProperty` DEFINERS in the 31-module closure) — this
+  fails CLOSED: a new doctor-adjacent module is automatically IN the
+  scanned set the moment it becomes reachable, with nobody having to
+  remember to add it. Re-running the same attack against the fixed test
+  now fails it, naming the exact file and line. **What this CANNOT see,
+  even after the fix:** a write reached through a dynamic `import()`, a
+  string-built specifier, an aliased or dynamically-constructed method
+  name, or one hiding inside a module added to the definer allowlist for a
+  reason other than legitimately defining the write boundary.
+
+None of the three alone is the property; together they cover typing,
+reachability, and literal call sites — three different failure shapes, not
+one check run three times.
+
+### The honesty split — what this command's own composition stands on
+
+The same four-level split `wyzr cycle`'s own README section states, applied
+to what THIS command specifically composes:
+
+1. **Never touched reality.** This command's own composition (config, then
+   credentials, then a login attempt, then a plug read, then the wrong-box
+   guard, wired together exactly this way) has never been exercised
+   against a real Wyze account by anyone. **No agent can ever run this
+   command for real** — `wyzr` is forbidden to install on the fleet box the
+   agent fleet runs on, and this command's own binary is not exempt from
+   that rule. The only way it is ever exercised for real is a human
+   executor running it on the manager box — see "The capture format"
+   below for how that run becomes part of this repo's own record.
+2. **Exercised by hand, once, outside this product** (2026-09-10): see
+   "`wyzr cycle`"'s own honesty-split section above — establishes the plug
+   controls the box and that cutting it does not brick it; nothing about
+   this repo's code.
+3. **PROVEN through this repo's own code — the READ paths, 2026-09-11.**
+   `devices list`/`plug status` ran on the manager box against the real
+   account: exit 0, matching an earlier hand measurement mac-for-mac. So
+   the primitives this command's own plug-read check stands on (login, the
+   auth envelope decode, the device-host body, `get_property_list`'s field
+   names, P3/P5 decoding) are exercised end to end. **This command's OWN
+   composition of them is new, unexercised wiring — not a new measurement
+   of the primitives themselves.**
+4. **Still never exercised: the write path.** This command holds no
+   `PlugWriter` anywhere in its dependency graph (see "Structurally
+   incapable of switching a plug" above) — `plug on`/`plug off` have never
+   run through this product, by anyone, ever, and this command cannot
+   exercise them even by accident.
+
+## The capture format
+
+See `docs/capture-format.md` for the full spec and a worked, end-to-end
+example built from synthetic placeholder data. Summary: `wyzr` cannot run
+for real anywhere an agent can reach, so a named, willing human executor on
+the manager box is the only channel through which reality reaches this
+repo — and the format in which they record what they saw (the exact
+command, the exact output, timestamps, the verdict, and **what was expected
+BEFORE the run**, in that structural order) is a real engineering artifact,
+implemented in `src/capture-format.ts`.
+
+**The address-disclosure boundary this format owns:**
+`src/cycle-wrong-box.ts`'s wrong-box guard interpolates every resolved
+target/local address into its own evidence trail, and that reaches `wyzr
+doctor --json`/`wyzr cycle --dry-run --json` alike — the epic ruled that
+disclosure load-bearing and acceptable **where it is READ** (an operator's
+own screen; scrubbing it there would make a mistaken refusal
+undiagnosable). Pasting that same `--json` output into a ticket is the
+TRANSMISSION half of that same boundary, and this format owns it:
+`src/capture-format.ts`'s `redactAddressesForPasteBack()` replaces every
+IPv4/IPv6/IPv4-mapped-IPv6 literal with `<address-redacted>` on the
+paste-back path only — never touching the diagnostics an operator reads on
+their own screen, since this module is never imported by `src/output.ts` or
+any command's own rendering. Required test
+(`test/unit/capture-format.test.ts`): built from
+`src/cycle-wrong-box.ts`'s own `evaluateWrongBoxGuard()`, with placeholder
+addresses in each shape `canonicaliseAddress()` recognizes — never a
+hand-typed string shaped to make the test pass.
 
 ## Development
 

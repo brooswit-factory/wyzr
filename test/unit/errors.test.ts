@@ -57,6 +57,9 @@ describe("ExitCode", () => {
       ExitCode.CycleRecoveryInconclusive,
       ExitCode.CycleRecoveryUnconfigured,
       ExitCode.ConfigInvalid,
+      ExitCode.DoctorNotReady,
+      ExitCode.DoctorInconclusive,
+      ExitCode.DoctorUnconfigured,
     ];
     expect(new Set(codes).size).toBe(codes.length);
   });
@@ -187,6 +190,49 @@ describe("ExitCode", () => {
   test("WYZR-28 appends 26 as config_invalid — the single configuration surface's one refusal code", () => {
     expect(ExitCode.ConfigInvalid).toBe(26);
     expect(ExitCodeName[ExitCode.ConfigInvalid]).toBe("config_invalid");
+  });
+
+  // WYZR-29 decision: append-only continues — 0-26 must never move.
+  // Verified by reading this repo's highest existing code (26, WYZR-28's)
+  // before appending, per the ticket's explicit instruction to verify
+  // rather than trust a number relayed in the ticket text.
+  test("0-26 are untouched by WYZR-29's additions", () => {
+    expect(ExitCode.Ok).toBe(0);
+    expect(ExitCode.Generic).toBe(1);
+    expect(ExitCode.Usage).toBe(2);
+    expect(ExitCode.CredentialsInvalid).toBe(3);
+    expect(ExitCode.NotFound).toBe(4);
+    expect(ExitCode.Network).toBe(5);
+    expect(ExitCode.ApiError).toBe(6);
+    expect(ExitCode.MfaRequired).toBe(7);
+    expect(ExitCode.AmbiguousDevice).toBe(8);
+    expect(ExitCode.StateUnknown).toBe(9);
+    expect(ExitCode.WriteContradicted).toBe(10);
+    expect(ExitCode.WedgeNotProven).toBe(11);
+    expect(ExitCode.WedgeInconclusiveBySharedCause).toBe(12);
+    expect(ExitCode.RecoveryNotRecovered).toBe(13);
+    expect(ExitCode.RecoveryFleetHalfRestored).toBe(14);
+    expect(ExitCode.RecoveryInconclusive).toBe(15);
+    expect(ExitCode.RecoveryUnconfigured).toBe(16);
+    expect(ExitCode.CycleRefusedByGate).toBe(17);
+    expect(ExitCode.CycleRefusedByWrongBoxGuard).toBe(18);
+    expect(ExitCode.CycleRefusedByPrecondition).toBe(19);
+    expect(ExitCode.CycleDryRunWouldAct).toBe(20);
+    expect(ExitCode.CycleStranded).toBe(21);
+    expect(ExitCode.CycleNotRecovered).toBe(22);
+    expect(ExitCode.CycleFleetHalfRestored).toBe(23);
+    expect(ExitCode.CycleRecoveryInconclusive).toBe(24);
+    expect(ExitCode.CycleRecoveryUnconfigured).toBe(25);
+    expect(ExitCode.ConfigInvalid).toBe(26);
+  });
+
+  test("WYZR-29 appends 27/28/29 for wyzr doctor's own outcome classes", () => {
+    expect(ExitCode.DoctorNotReady).toBe(27);
+    expect(ExitCode.DoctorInconclusive).toBe(28);
+    expect(ExitCode.DoctorUnconfigured).toBe(29);
+    expect(ExitCodeName[ExitCode.DoctorNotReady]).toBe("doctor_not_ready");
+    expect(ExitCodeName[ExitCode.DoctorInconclusive]).toBe("doctor_inconclusive");
+    expect(ExitCodeName[ExitCode.DoctorUnconfigured]).toBe("doctor_unconfigured");
   });
 });
 

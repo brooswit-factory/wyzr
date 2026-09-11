@@ -47,6 +47,54 @@ All notable changes to this project are documented in this file.
     `RealWrongBoxIdentityProbe` still converts an empty resolver result
     to `null` was already in place from WYZR-27.
 
+- `wyzr doctor` (WYZR-20/WYZR-29) — a read-only preflight command answering
+  "is this install actually able to pull the lever?", plus the CAPTURE
+  FORMAT an executor uses to record a real run and paste it back into a
+  ticket. **Must itself read a plug, so `test/unit/recovery-imports.test.ts`'s
+  own "no import path to the transport/auth layer at all" property does not
+  apply here** — see `test/unit/doctor-imports.test.ts` (import-closure,
+  watched RED first),`test/unit/doctor-plug.test.ts` (a mutation-tested
+  `@ts-expect-error` pin proving a write call inside a function typed to
+  accept only `PlugReader` does not typecheck), and
+  `test/unit/doctor-no-write.test.ts` (a source-level grep over a file set
+  DERIVED from the same import-closure walk `doctor-imports.test.ts`
+  performs, minus a 2-entry allowlist of legitimate `writePower`/
+  `setProperty` definers — fails CLOSED, so a new doctor-adjacent module is
+  automatically scanned the moment it becomes reachable, unlike this
+  check's own first version, which review caught scanning a HARDCODED
+  four-file array that a fifth, newly-added module reaching `writePower()`
+  passed straight through) — three checks, each blind to a different
+  failure shape.
+  - Reports config/credentials presence+permission (never a configured
+    value), a login attempt's success/failure (relayed VERBATIM, never
+    diagnosed — an auth failure's cause is genuinely ambiguous, see
+    `errorCode 1000`), each configured plug's `resolvable`/`readable`
+    state independently, the outside instruments' configured/reachable
+    state, and the wrong-box guard's own verdict (reused from
+    `src/cycle-wrong-box.ts`, never re-implemented) verbatim, including its
+    full evidence trail.
+  - Uses this repo's existing four-way `CheckOutcome` vocabulary
+    (`src/recovery.ts`, reused rather than re-invented) and the same
+    could-not-look-outranks-not-configured-outranks-ready precedence
+    `evaluateRecovery()` established, extended with its own propagation
+    rule for checks that genuinely NEST (no credentials -> no login
+    attempt -> no plug read): a check blocked by an unconfigured
+    prerequisite reports itself `not-configured` too; a check blocked by a
+    BROKEN prerequisite reports `could-not-look` — see `src/doctor.ts`'s
+    `blockedByPrerequisite()`.
+  - New exit codes `27`/`28`/`29` (`doctor_not_ready`/`doctor_inconclusive`/
+    `doctor_unconfigured`), append-only from `26`. READY reuses `0`.
+  - `src/capture-format.ts`: `redactAddressesForPasteBack()` scrubs every
+    IPv4/IPv6/IPv4-mapped-IPv6 literal (the exact shapes
+    `src/cycle-wrong-box.ts`'s `canonicaliseAddress()` recognizes) from the
+    paste-back path only — never the diagnostics an operator reads on
+    their own screen, which the epic ruled load-bearing there. A
+    `CaptureRecord` template puts the falsification criterion structurally
+    BEFORE the result, and `toProvenanceFixtureComment()` converts one into
+    a `PROVENANCE: CAPTURED-LIVE, <date>` tag matching
+    `src/transport-fake.ts`'s own convention — see `docs/capture-format.md`
+    for the full spec and a worked, synthetic-data example end to end.
+
 - The post-cycle recovery engine and `wyzr recovery status` (WYZR-18/WYZR-25)
   — a read-only command answering "did that power cycle actually work?" with
   evidence, not assumption. **Ships no plug-switching capability at all, and
