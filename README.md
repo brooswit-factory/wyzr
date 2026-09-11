@@ -2229,8 +2229,11 @@ path exercisable at zero network, zero credentials, zero real writes)
 without forcing the whole thing into one `evaluate(input)` call. Two pieces
 ARE extracted as genuinely pure: `src/cycle.ts`'s `decideGate()` (switches
 on the gate's verdict VALUE, never reconstructs one from text) and
-`src/cycle-wrong-box.ts`'s `evaluateWrongBoxGuard()` (pure, given an
-already-read hostname).
+`src/cycle-wrong-box.ts`'s own pure-engine/impure-runner pair,
+`evaluateWrongBoxGuard()`/`runWrongBoxGuard()` (the guard resolves real
+network-address evidence through its own injectable
+`WrongBoxIdentityProbe` boundary — see "The wrong-box guard" below for why
+a hostname-string comparison alone can never be made to work here).
 
 The sequence, every step recorded as its own evidence-trail entry (never
 collapsed into a boolean — the same "evidence is the product, the verdict
@@ -2328,76 +2331,85 @@ is tuned to it; the poll interval and the bound are both plain, configured,
 round-number defaults (see "Configuration" below), documented as exactly
 that.
 
-### The wrong-box guard (D7) — and the trap it creates rather than solves
+### The wrong-box guard (D7) — three rounds to get right, and why
 
 `cycle` must REFUSE when the machine it runs on is the machine it is about
 to cut. **There is no "run it from the fleet box" escape hatch, anywhere,
-under any flag** — `src/cycle-wrong-box.ts`'s `evaluateWrongBoxGuard()` runs
+under any flag** — `src/cycle-wrong-box.ts`'s `runWrongBoxGuard()` runs
 unconditionally, before this verb ever acts on the gate's verdict or the
 preconditions, on every path including `--force` and `--dry-run` (dry-run
 REPORTS its finding rather than skipping the check).
 
-**The trap this guard creates rather than solves: an instrument that cannot
-see the failure it exists to catch.** A naive guard compares a configured
-hostname string to the local hostname with a bare `!==` and PASSES ("not
-the same box") whenever they merely differ in FORM — a case difference,
-whitespace, or an FQDN vs its own short name — even though those three
-shapes plainly name the SAME machine. `evaluateWrongBoxGuard()` normalises
-(trim, lowercase, and compares both the full and short-name form) before
-comparing, and separately REFUSES outright, never guessing, in exactly
-three cases where it cannot even perform a direct comparison at all: no
-configured target, an unreadable local identity, or the two identities
-being in different FORMATS (an IP literal against a hostname — this guard
-performs no DNS resolution, so it cannot tell whether they name the same
-machine).
+**This guard went through three rounds before it was right, and the history
+is worth keeping — it is a small, self-contained instance of exactly what
+this epic exists to catch.**
 
-**CORRECTION (caught by review, 2026-09-11): an earlier version of this
-section claimed more than the code above actually does.** It said every
-gap the normalisation cannot close — including a DNS alias/CNAME and a
-container/VM hostname diverging from its physical host's own name — falls
-on the refuse side. **That was false, and it was caught by measurement,
-not inspection:** `evaluateWrongBoxGuard("fleetbox.internal.example",
-"srv-07")` (a DNS-alias-shaped divergence) and
-`evaluateWrongBoxGuard("physicalhost", "a3f9c21b4e77")` (a container-
-hostname-shaped divergence) both return `"not_target"` — the PROCEED side
-— not `"inconclusive"`. Only the IP-vs-hostname format mismatch actually
-refuses. The stated property was exactly this epic's own founding
-failure — the product asserting something untrue about its own knowledge —
-one layer out, in documentation rather than in a `reasons` string.
+- **Round 1** compared a configured hostname string to the local hostname,
+  normalised (trim, lowercase) and special-cased an FQDN against its own
+  short form as a match. Review caught, by MEASUREMENT before inspection,
+  that documenting this as "every unresolvable case refuses" was FALSE: a
+  DNS-alias/CNAME divergence and a container/VM hostname divergence both
+  produced `"not_target"` (PROCEED). The epic overturned the proposed
+  doc-only fix: **the code was wrong, not the docs** — a guard that fails
+  open on the exact case D7 exists to prevent is not fixed by describing
+  the hole accurately.
+- **Round 2** tried a cleverer string rule: compare only when both
+  identities are the same "kind" (a plain hostname, an FQDN sharing a
+  domain, an IP literal, a container-shaped hex id), refuse on every
+  cross-kind pairing. **Also wrong, caught the same way — by running it
+  against the epic's own worked example, not by inspecting the rule.**
+  `("physicalhost", "a3f9c21b4e77")` — the container-vs-hostname row the
+  correction was ABOUT — is indistinguishable in shape from two genuinely
+  different hosts. **The epic's actual finding: no pure function over two
+  STRINGS can rule this out.** The information needed to tell them apart
+  is not present in the two inputs, no matter how the comparison rule is
+  written — making the string rule cleverer was never going to close this.
+- **Round 3, what ships:** if a pure function cannot resolve identity, it
+  must not be the thing that clears the box. `src/cycle-wrong-box.ts` now
+  has a PURE decision core (`evaluateWrongBoxGuard()` — zero I/O,
+  exhaustively testable, decides nothing it wasn't handed) and an
+  injectable identity-resolution boundary (`WrongBoxIdentityProbe`,
+  `runWrongBoxGuard()` is the thin async runner that gathers evidence
+  through it) that supplies REAL evidence instead: this machine's own
+  network addresses (`getLocalAddresses()` — `os.networkInterfaces()`,
+  purely local, zero network I/O) and the configured target's own
+  addresses, resolved FROM THIS MACHINE (`resolveTargetAddresses()` — a
+  DNS/hosts-file lookup). Same pure-engine/injectable-I/O split this repo
+  already uses everywhere else (`src/wedge.ts` vs `src/wedge-probes.ts`).
+  `"is_target"` requires at least one address to appear in BOTH sets;
+  `"not_target"` requires both sets to resolve successfully and be
+  disjoint; anything else — resolution failure, an empty local-address
+  set, an unconfigured target — is `"inconclusive"`, exactly the
+  first-class "could not look" shape `src/wedge.ts`/`src/recovery.ts`
+  already report elsewhere.
 
-**What the normalisation covers, stated accurately:** for two identities in
-the SAME format (both look like hostnames, or both look like IP literals),
-leading/trailing whitespace, case, and FQDN-vs-short-name (both the full
-normalised string and the short name before the first `.` are compared; a
-match on either is treated as the SAME machine — the false-"same" direction
-is the SAFE direction here, since matching two representations of the
-identical hostname is harmless).
+**The constraint this mechanism was checked against before it was built:**
+this verb exists for the case where the far box is DEFINITIVELY GONE — when
+the gate says PROVEN, the target does not answer network traffic, by
+construction. Any identity mechanism that needs the TARGET to answer (ssh
+to it, ping it, ask it its own machine-id) would report "could not look"
+and REFUSE exactly when this verb is needed — this epic's own denominator
+trap in a third shape, an instrument whose construction excludes the case
+it exists to serve. `resolveTargetAddresses()` never contacts the target:
+DNS/hosts-file resolution is answered by the MANAGER's own resolver
+configuration, which requires the target to have a stable address on
+record, never that it be reachable or powered on right now.
 
-**What remains a REAL, OPEN gap, not something "inconclusive" absorbs:** a
-DNS alias/CNAME, or a container/VM hostname diverging from its physical
-host's own name, are NOT detected. Two strings that differ for either of
-those reasons but genuinely name the same machine will read `"not_target"`
-here, and the run proceeds. This is deliberate, not an oversight — resolving
-DNS or querying a container/VM's own physical-host identity would turn this
-pure, synchronous, zero-I/O string comparison into a call that can itself
-fail, hang, be spoofed, or simply disagree with the manager's own view of
-the network, trading one risk (an undetected alias) for another (a guard
-whose correctness now depends on DNS/container infrastructure this repo
-does not control). **The gap is closed by CONFIGURATION discipline instead:
-set `WYZR_CYCLE_WRONG_BOX_TARGET_HOST` to the EXACT string `os.hostname()`
-returns when run ON the machine `wyzr cycle` is meant to cut — never a DNS
-alias, a CNAME, or a name inferred from outside that machine.** An operator
-can confirm this by running `hostname` (or `wyzr cycle <device> --dry-run`,
-which reports the guard's own finding) ON the target machine itself and
-comparing it byte-for-byte against the configured value.
+**Operational requirement this places on deployment, stated here rather
+than assumed:** the configured target
+(`WYZR_CYCLE_WRONG_BOX_TARGET_HOST`, no default, same discipline as every
+other fleet-specific field in this repo) must resolve, from the machine
+`wyzr cycle` runs on, to that target's real address(es) — via DNS or a
+static `/etc/hosts` entry — independent of whether the target is currently
+up.
 
-This machine's own identity is read from exactly one place —
-`src/cycle-wrong-box.ts`'s `RealLocalIdentityProbe`, Node/Bun's own
-`os.hostname()`, injectable for tests — never ssh, never a subprocess,
-nothing that could be confused with reading the SUSPECT box's identity
-instead of this one's own. The configured target
-(`WYZR_CYCLE_WRONG_BOX_TARGET_HOST`) has no default, same discipline as
-every other fleet-specific field in this repo.
+**What this still cannot detect, and does not claim to:** multi-homed or
+NAT'd addressing this machine's own resolver does not know about; IPv6
+representational variance (a `::ffff:`-mapped IPv4 address is not
+normalised against its bare IPv4 form); and, structurally, any case where
+either probe call fails or returns nothing — those are `"inconclusive"`,
+never guessed. Address-set overlap is real evidence a string comparison
+could never be — it is not omniscience.
 
 ### Force (D4) — overrides the VERDICT, never the PRECONDITIONS, and never the wrong-box guard
 
@@ -2586,9 +2598,13 @@ engine's own verdict surfacing in the result, or an evidence-trail line
 only that step could have produced), not merely that it produced the
 right-shaped outcome. `test/unit/cycle.test.ts` covers the pure
 `decideGate()` decision in isolation; `test/unit/cycle-wrong-box.test.ts`
-covers the normalisation rules (including the IP-literal short-name trap —
-`shortName()` must never be applied across IP literals, which would make
-`10.0.0.5` and `10.0.0.6` look like the same "short name"); `test/unit/cycle-preconditions.test.ts`
+covers the pure `evaluateWrongBoxGuard()` core (address overlap/disjoint/
+unresolvable, including the epic's own container-vs-hostname worked example
+now correctly resolvable through address evidence — the round-2 regression
+pin that a string-shape-only rule can never come back), `runWrongBoxGuard()`'s
+concurrent probe-gathering, and `RealWrongBoxIdentityProbe`'s DNS/
+network-interface classification with both real (localhost/this machine's
+own interfaces) and injected-failure calls; `test/unit/cycle-preconditions.test.ts`
 covers the witness's structural pin; `test/unit/cycle-clock.test.ts` proves
 no real timer ever runs and that omitting the clock is a compile error;
 `test/unit/cycle-config.test.ts` and `test/unit/cycle-report.test.ts` cover

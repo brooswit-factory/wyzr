@@ -28,7 +28,7 @@ import { RecoveryVerdict, type RecoveryDirectPathObservation } from "../../src/r
 import type { RunRecoveryCheckOptions } from "../../src/recovery-runner.ts";
 import type { WedgeProbes } from "../../src/wedge-probes.ts";
 import type { RecoveryProbes } from "../../src/recovery-probes.ts";
-import type { LocalIdentityProbe } from "../../src/cycle-wrong-box.ts";
+import type { WrongBoxIdentityProbe } from "../../src/cycle-wrong-box.ts";
 import type { CycleTimingConfig } from "../../src/cycle-config.ts";
 import type { PlugReading } from "../../src/plug.ts";
 
@@ -38,8 +38,15 @@ const NOW = 1_800_000_000_000;
 // (the ticket's own rule; see also test/unit/redact.test.ts's convention
 // of fixture secrets that are obviously not real).
 const TARGET_HOST_FIXTURE = "cycle-test-target-fixture.invalid";
-const NOT_TARGET_HOST_FIXTURE = "cycle-test-runner-fixture.invalid";
 const HAND_RESTORE_COMMAND_FIXTURE = "cycle-test-fixture-restore-command --by-hand";
+// Fixture addresses (RFC 5737 TEST-NET-1/TEST-NET-3 — reserved for
+// documentation/example use, never a real routable address) standing in
+// for what src/cycle-wrong-box.ts's real DNS/network-interface probes
+// would report — see that module's own comment for why identity is
+// resolved through address evidence, not hostname strings, as of
+// WYZR-27's round-3 correction.
+const TARGET_ADDRESS_FIXTURE = "203.0.113.5";
+const LOCAL_ADDRESS_FIXTURE = "203.0.113.9";
 
 function gateConfig(overrides: Partial<WedgeConfig> = {}): WedgeConfig {
   return {
@@ -118,7 +125,10 @@ function recoveryConfig(overrides: Partial<RecoveryConfig> = {}): RecoveryConfig
   };
 }
 
-const clearIdentityProbe: LocalIdentityProbe = { getLocalHostname: async () => NOT_TARGET_HOST_FIXTURE };
+const clearIdentityProbe: WrongBoxIdentityProbe = {
+  resolveTargetAddresses: async () => [TARGET_ADDRESS_FIXTURE],
+  getLocalAddresses: async () => [LOCAL_ADDRESS_FIXTURE], // disjoint from the target -> not_target
+};
 
 const fastTiming: CycleTimingConfig = {
   offToOnWaitMs: 5,
@@ -246,7 +256,10 @@ describe("named test 5 (THE MOST IMPORTANT TEST IN THIS STORY): force + gate NOT
 describe("named test 7: wrong-box guard — configured target IS the local machine -> refuses, whatever the gate said", () => {
   test("gate PROVEN, but this machine IS the target -> refused_by_wrong_box_guard, not refused_by_gate", async () => {
     const plug = new FakeCyclePlugTransport({ readHandler: () => fakePlugReading({ power: "on", reachable: true }) });
-    const isTargetProbe: LocalIdentityProbe = { getLocalHostname: async () => TARGET_HOST_FIXTURE };
+    const isTargetProbe: WrongBoxIdentityProbe = {
+      resolveTargetAddresses: async () => [TARGET_ADDRESS_FIXTURE],
+      getLocalAddresses: async () => [TARGET_ADDRESS_FIXTURE], // overlaps -> is_target
+    };
     const deps = baseDeps({ gateProbes: provenGateProbes(NOW), identityProbe: isTargetProbe, forced: false });
     const result = await runCycleLive(plug, deps);
 
@@ -264,7 +277,10 @@ describe("named test 7: wrong-box guard — configured target IS the local machi
 
   test("gate NOT_PROVEN, forced=true, this machine IS the target -> STILL refused_by_wrong_box_guard (no escape hatch under any flag, D7)", async () => {
     const plug = new FakeCyclePlugTransport({ readHandler: () => fakePlugReading({ power: "on", reachable: true }) });
-    const isTargetProbe: LocalIdentityProbe = { getLocalHostname: async () => TARGET_HOST_FIXTURE };
+    const isTargetProbe: WrongBoxIdentityProbe = {
+      resolveTargetAddresses: async () => [TARGET_ADDRESS_FIXTURE],
+      getLocalAddresses: async () => [TARGET_ADDRESS_FIXTURE], // overlaps -> is_target
+    };
     const deps = baseDeps({ gateProbes: notProvenGateProbes(NOW), identityProbe: isTargetProbe, forced: true });
     const result = await runCycleLive(plug, deps);
 
@@ -284,9 +300,12 @@ describe("named test 8: wrong-box guard — unconfigured target / unreadable loc
     expect(plug.writeCount).toBe(0);
   });
 
-  test("8b: local identity unreadable -> refused_by_wrong_box_guard, outcome inconclusive", async () => {
+  test("8b: this machine's own addresses could not be enumerated -> refused_by_wrong_box_guard, outcome inconclusive", async () => {
     const plug = new FakeCyclePlugTransport({ readHandler: () => fakePlugReading({ power: "on", reachable: true }) });
-    const unreadableProbe: LocalIdentityProbe = { getLocalHostname: async () => null };
+    const unreadableProbe: WrongBoxIdentityProbe = {
+      resolveTargetAddresses: async () => [TARGET_ADDRESS_FIXTURE],
+      getLocalAddresses: async () => [],
+    };
     const deps = baseDeps({ identityProbe: unreadableProbe, forced: false });
     const result = await runCycleLive(plug, deps);
 
@@ -295,9 +314,13 @@ describe("named test 8: wrong-box guard — unconfigured target / unreadable loc
     expect(plug.writeCount).toBe(0);
   });
 
-  test("8c: comparison inconclusive (IP-literal target vs hostname local identity) -> refused_by_wrong_box_guard", async () => {
+  test("8c: comparison inconclusive (the configured target could not be resolved to any address at all) -> refused_by_wrong_box_guard", async () => {
     const plug = new FakeCyclePlugTransport({ readHandler: () => fakePlugReading({ power: "on", reachable: true }) });
-    const deps = baseDeps({ configuredTargetHost: "10.0.0.5", forced: false });
+    const unresolvableProbe: WrongBoxIdentityProbe = {
+      resolveTargetAddresses: async () => null,
+      getLocalAddresses: async () => [LOCAL_ADDRESS_FIXTURE],
+    };
+    const deps = baseDeps({ identityProbe: unresolvableProbe, forced: false });
     const result = await runCycleLive(plug, deps);
 
     expect(result.outcome).toBe("refused_by_wrong_box_guard");

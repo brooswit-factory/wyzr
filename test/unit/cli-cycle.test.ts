@@ -29,7 +29,7 @@ import {
 import { RealWyzeTransport } from "../../src/transport-http.ts";
 import { RealWedgeProbes } from "../../src/wedge-probes-real.ts";
 import { RealRecoveryProbes } from "../../src/recovery-probes-real.ts";
-import { RealLocalIdentityProbe } from "../../src/cycle-wrong-box.ts";
+import { RealWrongBoxIdentityProbe } from "../../src/cycle-wrong-box.ts";
 import { FakeWedgeProbes, fakeDirectPathDead, fakeLocalControlHealthy } from "../../src/wedge-probes-fake.ts";
 import { FakeRecoveryProbes } from "../../src/recovery-probes-fake.ts";
 import { DEFAULT_LOCAL_CONNECTIVITY_CONFIG, MANAGER_INTERNET_DEPENDENCY } from "../../src/wedge-config.ts";
@@ -49,7 +49,11 @@ const FAKE_CREDS: Credentials = {
 };
 
 const TARGET_HOST_FIXTURE = "cli-cycle-target-fixture.invalid";
-const NOT_TARGET_HOST_FIXTURE = "cli-cycle-runner-fixture.invalid";
+// RFC 5737 TEST-NET-1/TEST-NET-3 fixture addresses — see
+// test/unit/cycle-runner.test.ts's own comment for why identity is now
+// resolved through address evidence, not hostname strings.
+const TARGET_ADDRESS_FIXTURE = "203.0.113.5";
+const LOCAL_ADDRESS_FIXTURE = "203.0.113.9";
 
 function silence(): { restore: () => void } {
   const logSpy = spyOn(console, "log").mockImplementation(() => {});
@@ -105,7 +109,10 @@ function baseDeps(overrides: Partial<CycleCommandDeps> = {}): CycleCommandDeps {
     createGateProbes: () => new FakeWedgeProbes({ localConnectivityHandler: async () => fakeLocalControlHealthy() }),
     createRecoveryWedgeProbes: () => new FakeWedgeProbes({ localConnectivityHandler: async () => fakeLocalControlHealthy() }),
     createRecoveryProbes: () => new FakeRecoveryProbes(),
-    createIdentityProbe: () => ({ getLocalHostname: async () => NOT_TARGET_HOST_FIXTURE }),
+    createIdentityProbe: () => ({
+      resolveTargetAddresses: async () => [TARGET_ADDRESS_FIXTURE],
+      getLocalAddresses: async () => [LOCAL_ADDRESS_FIXTURE], // disjoint -> not_target
+    }),
     clock: createFakeCycleClock(1_800_000_000_000),
     confirm: async () => null,
     ...overrides,
@@ -353,8 +360,8 @@ describe("defaultCycleCommandDeps — real wiring constructors (construction onl
   test("createRecoveryProbes() constructs a RealRecoveryProbes", () => {
     expect(defaultCycleCommandDeps.createRecoveryProbes()).toBeInstanceOf(RealRecoveryProbes);
   });
-  test("createIdentityProbe() constructs a RealLocalIdentityProbe", () => {
-    expect(defaultCycleCommandDeps.createIdentityProbe()).toBeInstanceOf(RealLocalIdentityProbe);
+  test("createIdentityProbe() constructs a RealWrongBoxIdentityProbe", () => {
+    expect(defaultCycleCommandDeps.createIdentityProbe()).toBeInstanceOf(RealWrongBoxIdentityProbe);
   });
   test("clock is RealCycleClock, and loadConfig() reads real env without touching the network", () => {
     expect(defaultCycleCommandDeps.clock).toBe(RealCycleClock);

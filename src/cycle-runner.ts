@@ -14,12 +14,16 @@
 // OFF; a write must never be reachable from the dry-run path at all). Two
 // pieces ARE extracted as genuinely pure/injectable, on this repo's
 // established pattern: src/cycle.ts's decideGate() (pure, switches on the
-// gate's verdict VALUE) and src/cycle-wrong-box.ts's evaluateWrongBoxGuard()
-// (pure, given an already-read hostname). Everything below is the I/O that
-// gathers their inputs and carries out what they decide — same role
-// src/wedge-runner.ts/src/recovery-runner.ts play for their own engines,
-// and this module calls BOTH of those runners unchanged (runWedgeCheck(),
-// runRecoveryCheck()) rather than re-deriving either verdict.
+// gate's verdict VALUE) and src/cycle-wrong-box.ts's own
+// pure-engine/impure-runner pair, evaluateWrongBoxGuard()/runWrongBoxGuard()
+// (the guard resolves real network-address evidence through its own
+// injectable WrongBoxIdentityProbe boundary — see that module's own top
+// comment for why a hostname-string comparison alone can never be made to
+// work here). Everything below is the I/O that gathers their inputs and
+// carries out what they decide — same role src/wedge-runner.ts/
+// src/recovery-runner.ts play for their own engines, and this module calls
+// BOTH of those runners unchanged (runWedgeCheck(), runRecoveryCheck())
+// rather than re-deriving either verdict.
 //
 // TWO ENTRY POINTS, NOT ONE WITH A `dryRun: boolean` PARAMETER — this is
 // R5's structural requirement made concrete: runCycleDryRun() accepts a
@@ -60,7 +64,7 @@ import { RecoveryVerdict } from "./recovery.ts";
 import { classifyWriteOutcome, type PlugReading, type WriteResult } from "./plug.ts";
 import type { PlugReader, PlugWriter } from "./cycle-plug.ts";
 import type { CycleClock } from "./cycle-clock.ts";
-import { evaluateWrongBoxGuard, type LocalIdentityProbe, type WrongBoxGuardResult } from "./cycle-wrong-box.ts";
+import { runWrongBoxGuard, type WrongBoxGuardResult, type WrongBoxIdentityProbe } from "./cycle-wrong-box.ts";
 import { evaluatePreconditions, type PreconditionsClearedWitness, type PreconditionsResult } from "./cycle-preconditions.ts";
 import {
   decideGate,
@@ -78,7 +82,7 @@ export interface CycleRunnerDeps {
   readonly gateConfig: WedgeConfig;
   readonly gateProbes: WedgeProbes;
   readonly configuredTargetHost: string | undefined;
-  readonly identityProbe: LocalIdentityProbe;
+  readonly identityProbe: WrongBoxIdentityProbe;
   readonly recoveryConfig: RecoveryConfig;
   readonly recoveryWedgeProbes: WedgeProbes;
   readonly recoveryProbes: RecoveryProbes;
@@ -116,8 +120,7 @@ async function runPreamble(
   const gate = await runWedgeCheck({ config: deps.gateConfig, probes: deps.gateProbes, now: deps.clock.now() });
   reasons.push(...gate.reasons);
 
-  const localHostname = await deps.identityProbe.getLocalHostname();
-  const wrongBoxGuard = evaluateWrongBoxGuard(deps.configuredTargetHost, localHostname);
+  const wrongBoxGuard = await runWrongBoxGuard(deps.configuredTargetHost, deps.identityProbe);
   reasons.push(...wrongBoxGuard.reasons);
 
   const preconditions = await evaluatePreconditions(plug);

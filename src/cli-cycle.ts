@@ -44,7 +44,7 @@ import { RealRecoveryProbes } from "./recovery-probes-real.ts";
 import type { RecoveryProbes } from "./recovery-probes.ts";
 import { loadCycleConfigFromEnv, type CycleConfig } from "./cycle-config.ts";
 import { RealCyclePlugTransport, type PlugWriter } from "./cycle-plug.ts";
-import { RealLocalIdentityProbe, type LocalIdentityProbe } from "./cycle-wrong-box.ts";
+import { RealWrongBoxIdentityProbe, type WrongBoxIdentityProbe } from "./cycle-wrong-box.ts";
 import { RealCycleClock, type CycleClock } from "./cycle-clock.ts";
 import { runCycleDryRun, runCycleLive, type CycleRunnerDeps } from "./cycle-runner.ts";
 import type { CycleResult } from "./cycle.ts";
@@ -84,7 +84,7 @@ export interface CycleCommandDeps {
   createGateProbes: () => WedgeProbes;
   createRecoveryWedgeProbes: () => WedgeProbes;
   createRecoveryProbes: () => RecoveryProbes;
-  createIdentityProbe: () => LocalIdentityProbe;
+  createIdentityProbe: () => WrongBoxIdentityProbe;
   clock: CycleClock;
   confirm: ConfirmFn;
 }
@@ -96,7 +96,7 @@ export const defaultCycleCommandDeps: CycleCommandDeps = {
   createGateProbes: () => new RealWedgeProbes(),
   createRecoveryWedgeProbes: () => new RealWedgeProbes(),
   createRecoveryProbes: () => new RealRecoveryProbes(),
-  createIdentityProbe: () => new RealLocalIdentityProbe(),
+  createIdentityProbe: () => new RealWrongBoxIdentityProbe(),
   clock: RealCycleClock,
   confirm: realConfirm,
 };

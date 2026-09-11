@@ -1,133 +1,219 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateWrongBoxGuard, RealLocalIdentityProbe } from "../../src/cycle-wrong-box.ts";
+import { networkInterfaces } from "node:os";
+import {
+  evaluateWrongBoxGuard,
+  RealWrongBoxIdentityProbe,
+  runWrongBoxGuard,
+  type WrongBoxIdentityProbe,
+} from "../../src/cycle-wrong-box.ts";
 
-describe("evaluateWrongBoxGuard — is_target (D7: refuses whatever the gate said)", () => {
-  test("exact hostname match (same case) -> is_target", () => {
-    const result = evaluateWrongBoxGuard("host-a", "host-a");
+const TARGET_FIXTURE = "target-fixture.invalid";
+
+describe("evaluateWrongBoxGuard (pure core) — is_target: overlapping addresses (D7: refuses whatever the gate said)", () => {
+  test("target resolves to an address this machine also owns -> is_target", () => {
+    const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5"], ["10.0.0.5", "192.168.1.9"]);
+    expect(result.outcome).toBe("is_target");
+    expect(result.reasons.join(" ")).toContain("10.0.0.5");
+  });
+
+  test("case/whitespace in the resolved address strings is normalised before comparing", () => {
+    const result = evaluateWrongBoxGuard(TARGET_FIXTURE, [" FE80::1 "], ["fe80::1"]);
     expect(result.outcome).toBe("is_target");
   });
 
-  test("case-only difference -> is_target (normalisation covers case)", () => {
-    const result = evaluateWrongBoxGuard("Host-A", "host-a");
-    expect(result.outcome).toBe("is_target");
-  });
-
-  test("leading/trailing whitespace -> is_target (normalisation covers trim)", () => {
-    const result = evaluateWrongBoxGuard("  host-a  ", "host-a");
-    expect(result.outcome).toBe("is_target");
-  });
-
-  test("FQDN target vs short local name -> is_target (the naive-guard trap: a bare !== would call this different)", () => {
-    const result = evaluateWrongBoxGuard("host-a.example.internal", "host-a");
-    expect(result.outcome).toBe("is_target");
-  });
-
-  test("short target vs FQDN local name -> is_target (same trap, other direction)", () => {
-    const result = evaluateWrongBoxGuard("host-a", "host-a.example.internal");
+  test("only ONE overlapping address among several is still enough to refuse", () => {
+    const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5", "10.0.0.6"], ["10.0.0.9", "10.0.0.6"]);
     expect(result.outcome).toBe("is_target");
   });
 });
 
-describe("evaluateWrongBoxGuard — inconclusive (D7: err tight — refuses when it cannot affirmatively establish NOT the target)", () => {
+describe("evaluateWrongBoxGuard (pure core) — not_target: disjoint, both successfully resolved (real evidence, not a shape heuristic)", () => {
+  test("genuinely different address sets -> not_target", () => {
+    const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5"], ["10.0.0.9"]);
+    expect(result.outcome).toBe("not_target");
+  });
+
+  test("this is the epic's own worked example, now resolvable through address evidence rather than string shape: a container-shaped local identity and a plain target name, disjoint addresses -> not_target", () => {
+    // Named for what it constructs (R7): unlike round 2's string-kind
+    // rule, this does NOT depend on either identity's textual SHAPE at
+    // all — only on the addresses the probe boundary reports. A
+    // "physicalhost"-vs-"a3f9c21b4e77"-shaped pair is exactly as
+    // resolvable as any other pair once real address evidence exists.
+    const result = evaluateWrongBoxGuard("physicalhost", ["10.0.0.5"], ["10.0.0.9"]);
+    expect(result.outcome).toBe("not_target");
+  });
+});
+
+describe("evaluateWrongBoxGuard (pure core) — inconclusive: every case where evidence is missing (err tight, D7)", () => {
   test("named test 8a: target unconfigured (undefined) -> inconclusive, REFUSES", () => {
-    const result = evaluateWrongBoxGuard(undefined, "some-host");
+    const result = evaluateWrongBoxGuard(undefined, null, ["10.0.0.9"]);
     expect(result.outcome).toBe("inconclusive");
     expect(result.reasons.join(" ")).toContain("no configured target host");
   });
 
   test("named test 8a: target unconfigured (empty string) -> inconclusive, REFUSES", () => {
-    const result = evaluateWrongBoxGuard("   ", "some-host");
+    const result = evaluateWrongBoxGuard("   ", null, ["10.0.0.9"]);
     expect(result.outcome).toBe("inconclusive");
   });
 
-  test("named test 8b: local identity unreadable (null) -> inconclusive, REFUSES", () => {
-    const result = evaluateWrongBoxGuard("host-a", null);
+  test("named test 8b (generalised): the target could not be resolved to any address -> inconclusive, REFUSES, and the message states this does not mean the target is powered off", () => {
+    const result = evaluateWrongBoxGuard(TARGET_FIXTURE, null, ["10.0.0.9"]);
     expect(result.outcome).toBe("inconclusive");
-    expect(result.reasons.join(" ")).toContain("this machine's own hostname could not be read");
+    expect(result.reasons.join(" ")).toContain("could not resolve");
+    expect(result.reasons.join(" ")).toContain("not why this failed");
   });
 
-  test("named test 8c: IP-literal target vs hostname local -> inconclusive (no DNS resolution is performed)", () => {
-    const result = evaluateWrongBoxGuard("10.0.0.5", "host-a");
+  test("this machine's own addresses could not be enumerated -> inconclusive, REFUSES", () => {
+    const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5"], []);
     expect(result.outcome).toBe("inconclusive");
-    expect(result.reasons.join(" ")).toContain("different formats");
-  });
-
-  test("named test 8c, other direction: hostname target vs IP-literal local -> inconclusive", () => {
-    const result = evaluateWrongBoxGuard("host-a", "10.0.0.5");
-    expect(result.outcome).toBe("inconclusive");
+    expect(result.reasons.join(" ")).toContain("could not enumerate");
   });
 });
 
-describe("evaluateWrongBoxGuard — not_target (affirmatively established difference)", () => {
-  test("two genuinely different hostnames, same format -> not_target", () => {
-    const result = evaluateWrongBoxGuard("host-a", "host-b");
-    expect(result.outcome).toBe("not_target");
-  });
+describe(
+  "evaluateWrongBoxGuard — ROUND 3 regression pin: no pure STRING rule can resolve identity, and this construction no longer tries to (WYZR-27, 2026-09-11)",
+  () => {
+    // History, briefly (full account in src/cycle-wrong-box.ts's own top
+    // comment): round 1 special-cased FQDN-vs-short-name and let a DNS
+    // alias/container divergence read "not_target". Round 2 replaced that
+    // with a "same kind of identifier" string rule — ALSO wrong, because
+    // it classified "physicalhost" and "a3f9c21b4e77" (the epic's own
+    // worked example) as two ordinary short hostnames, so it STILL cleared
+    // the exact row the correction was about. The epic's actual finding:
+    // no pure function over two STRINGS can rule this out — the
+    // information needed is not in the inputs. Round 3 (this file, current
+    // code) replaces the string rule entirely with real address evidence
+    // gathered through the injectable WrongBoxIdentityProbe boundary. This
+    // block pins that a STRING-SHAPE-ONLY heuristic can never come back:
+    // feeding the pure core real, overlapping address evidence for a
+    // shape-mismatched pair still (correctly) refuses, and disjoint
+    // evidence for the identical shape-mismatched pair still (correctly)
+    // proceeds — the OUTCOME tracks the ADDRESSES, never the strings'
+    // shape.
 
-  test("two different IP literals -> not_target (same format, affirmatively different)", () => {
-    const result = evaluateWrongBoxGuard("10.0.0.5", "10.0.0.6");
-    expect(result.outcome).toBe("not_target");
-  });
+    test("shape-mismatched identities (fqdn-shaped target, short-shaped local) that DO share an address -> is_target, proving the decision tracks addresses, not string shape", () => {
+      const result = evaluateWrongBoxGuard("fleetbox.internal.example", ["10.0.0.5"], ["10.0.0.5"]);
+      expect(result.outcome).toBe("is_target");
+    });
 
-  test("two different FQDNs with different short names -> not_target", () => {
-    const result = evaluateWrongBoxGuard("host-a.example.internal", "host-b.example.internal");
-    expect(result.outcome).toBe("not_target");
-  });
-});
+    test("shape-mismatched identities (hex-id-shaped local, short-shaped target) that do NOT share an address -> not_target, proving a container-id-shaped local identity is no longer treated as unresolvable by construction", () => {
+      const result = evaluateWrongBoxGuard("physicalhost", ["10.0.0.5"], ["10.0.0.9"]);
+      expect(result.outcome).toBe("not_target");
+    });
 
-describe("evaluateWrongBoxGuard — the REAL, OPEN gap: a DNS alias/CNAME or a container/VM hostname divergence is NOT detected (caught by review, 2026-09-11)", () => {
-  // An earlier version of this function's doc comment (and the README's
-  // own description) claimed every one of these three cases returns
-  // "inconclusive" — that was false, and this test pins the TRUE
-  // behavior so that claim can never quietly return. The falsification
-  // criterion, stated before running it: if the retired claim were true,
-  // all three rows below would read "inconclusive". Only the IP-vs-
-  // hostname row actually does.
+    test("two ordinary, differently-named hosts with disjoint addresses -> not_target — the guard must NOT become stricter than the evidence warrants (round-2's own warning against over-correcting still applies)", () => {
+      const result = evaluateWrongBoxGuard("manager-01", ["10.0.0.5"], ["10.0.0.9"]);
+      expect(result.outcome).toBe("not_target");
+    });
+  },
+);
 
-  test("a DNS-alias-shaped target differing from the local hostname string -> not_target (PROCEEDS) — this function performs no DNS resolution and cannot know they might be the same machine", () => {
-    const result = evaluateWrongBoxGuard("fleetbox.internal.example", "srv-07");
-    expect(result.outcome).toBe("not_target");
-  });
+describe("runWrongBoxGuard (I/O runner) — gathers probe evidence concurrently and hands it to the pure core", () => {
+  function fakeProbe(overrides: Partial<WrongBoxIdentityProbe> = {}): WrongBoxIdentityProbe {
+    return {
+      resolveTargetAddresses: async () => ["10.0.0.5"],
+      getLocalAddresses: async () => ["10.0.0.5"],
+      ...overrides,
+    };
+  }
 
-  test("a container-hostname-shaped local identity differing from a physical-host-shaped target -> not_target (PROCEEDS) — this function performs no container/host identity query", () => {
-    const result = evaluateWrongBoxGuard("physicalhost", "a3f9c21b4e77");
-    expect(result.outcome).toBe("not_target");
-  });
-
-  test("only the IP-vs-hostname FORMAT mismatch among these three shapes actually refuses (inconclusive), confirming the other two are the genuine open gap, not a broader pattern", () => {
-    const result = evaluateWrongBoxGuard("10.9.8.7", "srv-07");
-    expect(result.outcome).toBe("inconclusive");
-  });
-});
-
-describe("RealLocalIdentityProbe", () => {
-  test("getLocalHostname() returns this process's own hostname as a non-empty string in this environment", async () => {
-    // This is the ONLY place this probe reads from — os.hostname() — no
-    // ssh, no subprocess. A real, live call (no network) — appropriate
-    // here since it touches nothing but this process's own OS binding, the
-    // same "real" a plain Date.now() call would be.
-    const probe = new RealLocalIdentityProbe();
-    const hostname = await probe.getLocalHostname();
-    expect(typeof hostname).toBe("string");
-    expect((hostname ?? "").length).toBeGreaterThan(0);
-  });
-
-  test("getLocalHostname() returns null (unreadable) when the injected hostname primitive throws — the catch branch, never propagated as a rejection", async () => {
-    const probe = new RealLocalIdentityProbe({
-      hostnameFn: () => {
-        throw new Error("simulated-os-hostname-failure-fixture");
+  test("unconfigured target -> inconclusive without ever calling the probe", async () => {
+    let calls = 0;
+    const probe = fakeProbe({
+      resolveTargetAddresses: async () => {
+        calls++;
+        return ["10.0.0.5"];
       },
     });
-    await expect(probe.getLocalHostname()).resolves.toBeNull();
+    const result = await runWrongBoxGuard(undefined, probe);
+    expect(result.outcome).toBe("inconclusive");
+    expect(calls).toBe(0);
   });
 
-  test("getLocalHostname() returns null when the injected primitive returns an empty/whitespace-only string", async () => {
-    const probe = new RealLocalIdentityProbe({ hostnameFn: () => "   " });
-    await expect(probe.getLocalHostname()).resolves.toBeNull();
+  test("overlapping addresses from the real probe shape -> is_target", async () => {
+    const result = await runWrongBoxGuard(TARGET_FIXTURE, fakeProbe());
+    expect(result.outcome).toBe("is_target");
   });
 
-  test("getLocalHostname() returns the injected primitive's value verbatim when it is non-empty", async () => {
-    const probe = new RealLocalIdentityProbe({ hostnameFn: () => "injected-hostname-fixture" });
-    await expect(probe.getLocalHostname()).resolves.toBe("injected-hostname-fixture");
+  test("disjoint addresses -> not_target", async () => {
+    const result = await runWrongBoxGuard(
+      TARGET_FIXTURE,
+      fakeProbe({ getLocalAddresses: async () => ["10.0.0.9"] }),
+    );
+    expect(result.outcome).toBe("not_target");
+  });
+
+  test("probe reports resolution failure (null) -> inconclusive", async () => {
+    const result = await runWrongBoxGuard(TARGET_FIXTURE, fakeProbe({ resolveTargetAddresses: async () => null }));
+    expect(result.outcome).toBe("inconclusive");
+  });
+
+  test("target is passed to the probe trimmed", async () => {
+    let seen: string | undefined;
+    const probe = fakeProbe({
+      resolveTargetAddresses: async (target) => {
+        seen = target;
+        return ["10.0.0.5"];
+      },
+    });
+    await runWrongBoxGuard(`  ${TARGET_FIXTURE}  `, probe);
+    expect(seen).toBe(TARGET_FIXTURE);
+  });
+});
+
+describe("RealWrongBoxIdentityProbe", () => {
+  test("resolveTargetAddresses() returns the injected resolver's addresses verbatim", async () => {
+    const probe = new RealWrongBoxIdentityProbe({ resolveAddressesFn: async () => ["10.0.0.5", "10.0.0.6"] });
+    await expect(probe.resolveTargetAddresses(TARGET_FIXTURE)).resolves.toEqual(["10.0.0.5", "10.0.0.6"]);
+  });
+
+  test("resolveTargetAddresses() returns null when the injected resolver throws — never a rejection", async () => {
+    const probe = new RealWrongBoxIdentityProbe({
+      resolveAddressesFn: async () => {
+        throw new Error("simulated-dns-failure-fixture");
+      },
+    });
+    await expect(probe.resolveTargetAddresses(TARGET_FIXTURE)).resolves.toBeNull();
+  });
+
+  test("resolveTargetAddresses() returns null when the injected resolver resolves to zero addresses", async () => {
+    const probe = new RealWrongBoxIdentityProbe({ resolveAddressesFn: async () => [] });
+    await expect(probe.resolveTargetAddresses(TARGET_FIXTURE)).resolves.toBeNull();
+  });
+
+  test("getLocalAddresses() excludes internal/loopback entries and flattens every interface's addresses", async () => {
+    const fakeInterfaces = {
+      lo: [{ address: "127.0.0.1", internal: true }],
+      eth0: [
+        { address: "10.0.0.5", internal: false },
+        { address: "fe80::1", internal: false },
+      ],
+    };
+    const probe = new RealWrongBoxIdentityProbe({
+      networkInterfacesFn: () => fakeInterfaces as unknown as ReturnType<typeof networkInterfaces>,
+    });
+    await expect(probe.getLocalAddresses()).resolves.toEqual(["10.0.0.5", "fe80::1"]);
+  });
+
+  test("getLocalAddresses() returns an empty array when the injected primitive throws — never a rejection", async () => {
+    const probe = new RealWrongBoxIdentityProbe({
+      networkInterfacesFn: () => {
+        throw new Error("simulated-os-failure-fixture");
+      },
+    });
+    await expect(probe.getLocalAddresses()).resolves.toEqual([]);
+  });
+
+  test("the real (uninjected) probe actually enumerates this process's own network addresses — a real, live call (no network I/O — os.networkInterfaces() is purely local)", async () => {
+    const probe = new RealWrongBoxIdentityProbe();
+    const addresses = await probe.getLocalAddresses();
+    expect(Array.isArray(addresses)).toBe(true);
+  });
+
+  test("the real (uninjected) probe actually resolves 'localhost' via this machine's own hosts-file/resolver — a real, live call answered locally, never a query that could reach any fleet host", async () => {
+    const probe = new RealWrongBoxIdentityProbe();
+    const addresses = await probe.resolveTargetAddresses("localhost");
+    expect(addresses).not.toBeNull();
+    expect(addresses!.length).toBeGreaterThan(0);
   });
 });
