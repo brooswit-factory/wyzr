@@ -53,6 +53,21 @@
 // override. Reporting in weakest-to-strongest order (gate last) means the
 // outcome you see is always the strongest reason the run could not proceed,
 // never a weaker one masking a stronger one that force cannot fix anyway.
+//
+// EXPORTED FOR REUSE (WYZR-20/WYZR-30): performOff()/performRestoreNeverGiveUp()/
+// describeOff()/describeRestore() are the at-most-once-OFF, never-give-up-ON
+// primitives — generic over PlugWriter/CycleClock/CycleTimingConfig/
+// PreconditionsClearedWitness, with nothing gate/wrong-box/recovery-specific
+// in their own bodies. src/rehearsal-runner.ts (the first plug write this
+// product ever performs, on the SAFE plug — see that module's own top
+// comment) reuses these UNCHANGED rather than re-deriving the same
+// restore-is-structurally-unskippable reasoning a second time: "a rewrite
+// can silently lose a property the code it replaced had" applies most
+// sharply to exactly this code, so there is no second copy to drift from
+// this one. This is an additive visibility change only (`function` ->
+// `export function`) — no behavior here is altered, and this module's own
+// runCycleDryRun()/runCycleLive() call these exact same exported functions,
+// not a parallel internal copy.
 
 import { runWedgeCheck } from "./wedge-runner.ts";
 import type { WedgeConfig } from "./wedge-config.ts";
@@ -246,7 +261,7 @@ async function readBackWithRetry(
  * the restore always runs next (see runCycleLive() below), never skipped
  * on the theory that "the write failed, so there is nothing to restore."
  */
-async function performOff(
+export async function performOff(
   plug: PlugWriter,
   witness: PreconditionsClearedWitness,
   clock: CycleClock,
@@ -290,7 +305,7 @@ async function performOff(
  * issuing new ON attempts, spaced by `timing.restorePollIntervalMs`, until
  * the outer bound elapses — at which point the caller reports STRANDED.
  */
-async function performRestoreNeverGiveUp(plug: PlugWriter, clock: CycleClock, timing: CycleTimingConfig): Promise<RestoreEvidence> {
+export async function performRestoreNeverGiveUp(plug: PlugWriter, clock: CycleClock, timing: CycleTimingConfig): Promise<RestoreEvidence> {
   const attempts: RestoreAttemptEvidence[] = [];
   const startedAt = clock.now();
 
@@ -341,7 +356,7 @@ async function performRestoreNeverGiveUp(plug: PlugWriter, clock: CycleClock, ti
   }
 }
 
-function describeOff(off: OffAttemptEvidence): string {
+export function describeOff(off: OffAttemptEvidence): string {
   const writeNote = off.writeThrew ? ` (the write call itself threw: ${off.writeErrorMessage})` : "";
   return (
     `OFF: exactly one set_property attempt made${writeNote} — read-back after ${off.readBacks.length} attempt(s): ` +
@@ -350,7 +365,7 @@ function describeOff(off: OffAttemptEvidence): string {
   );
 }
 
-function describeRestore(restore: RestoreEvidence): string {
+export function describeRestore(restore: RestoreEvidence): string {
   return (
     `RESTORE: ${restore.attempts.length} ON write attempt(s) over ${restore.elapsedMs}ms — ` +
     `${restore.confirmed ? "CONFIRMED on" : "NEVER confirmed on within the configured bound"}.`

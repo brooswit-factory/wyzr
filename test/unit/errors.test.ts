@@ -60,6 +60,10 @@ describe("ExitCode", () => {
       ExitCode.DoctorNotReady,
       ExitCode.DoctorInconclusive,
       ExitCode.DoctorUnconfigured,
+      ExitCode.RehearsalRefusedSameAsFleetPlug,
+      ExitCode.RehearsalRefusedByPrecondition,
+      ExitCode.RehearsalPreviewWouldWrite,
+      ExitCode.RehearsalStranded,
     ];
     expect(new Set(codes).size).toBe(codes.length);
   });
@@ -233,6 +237,54 @@ describe("ExitCode", () => {
     expect(ExitCodeName[ExitCode.DoctorNotReady]).toBe("doctor_not_ready");
     expect(ExitCodeName[ExitCode.DoctorInconclusive]).toBe("doctor_inconclusive");
     expect(ExitCodeName[ExitCode.DoctorUnconfigured]).toBe("doctor_unconfigured");
+  });
+
+  // WYZR-30 decision: append-only continues — 0-29 must never move.
+  // Verified by reading this repo's highest existing code (29, WYZR-29's)
+  // before appending, per the ticket's explicit instruction to verify
+  // rather than trust a number relayed in the ticket text.
+  test("0-29 are untouched by WYZR-30's additions", () => {
+    expect(ExitCode.Ok).toBe(0);
+    expect(ExitCode.Generic).toBe(1);
+    expect(ExitCode.Usage).toBe(2);
+    expect(ExitCode.CredentialsInvalid).toBe(3);
+    expect(ExitCode.NotFound).toBe(4);
+    expect(ExitCode.Network).toBe(5);
+    expect(ExitCode.ApiError).toBe(6);
+    expect(ExitCode.MfaRequired).toBe(7);
+    expect(ExitCode.AmbiguousDevice).toBe(8);
+    expect(ExitCode.StateUnknown).toBe(9);
+    expect(ExitCode.WriteContradicted).toBe(10);
+    expect(ExitCode.WedgeNotProven).toBe(11);
+    expect(ExitCode.WedgeInconclusiveBySharedCause).toBe(12);
+    expect(ExitCode.RecoveryNotRecovered).toBe(13);
+    expect(ExitCode.RecoveryFleetHalfRestored).toBe(14);
+    expect(ExitCode.RecoveryInconclusive).toBe(15);
+    expect(ExitCode.RecoveryUnconfigured).toBe(16);
+    expect(ExitCode.CycleRefusedByGate).toBe(17);
+    expect(ExitCode.CycleRefusedByWrongBoxGuard).toBe(18);
+    expect(ExitCode.CycleRefusedByPrecondition).toBe(19);
+    expect(ExitCode.CycleDryRunWouldAct).toBe(20);
+    expect(ExitCode.CycleStranded).toBe(21);
+    expect(ExitCode.CycleNotRecovered).toBe(22);
+    expect(ExitCode.CycleFleetHalfRestored).toBe(23);
+    expect(ExitCode.CycleRecoveryInconclusive).toBe(24);
+    expect(ExitCode.CycleRecoveryUnconfigured).toBe(25);
+    expect(ExitCode.ConfigInvalid).toBe(26);
+    expect(ExitCode.DoctorNotReady).toBe(27);
+    expect(ExitCode.DoctorInconclusive).toBe(28);
+    expect(ExitCode.DoctorUnconfigured).toBe(29);
+  });
+
+  test("WYZR-30 appends 30-33 for wyzr rehearse-safe-plug-write's own outcome classes", () => {
+    expect(ExitCode.RehearsalRefusedSameAsFleetPlug).toBe(30);
+    expect(ExitCode.RehearsalRefusedByPrecondition).toBe(31);
+    expect(ExitCode.RehearsalPreviewWouldWrite).toBe(32);
+    expect(ExitCode.RehearsalStranded).toBe(33);
+    expect(ExitCodeName[ExitCode.RehearsalRefusedSameAsFleetPlug]).toBe("rehearsal_refused_same_as_fleet_plug");
+    expect(ExitCodeName[ExitCode.RehearsalRefusedByPrecondition]).toBe("rehearsal_refused_by_precondition");
+    expect(ExitCodeName[ExitCode.RehearsalPreviewWouldWrite]).toBe("rehearsal_preview_would_write");
+    expect(ExitCodeName[ExitCode.RehearsalStranded]).toBe("rehearsal_stranded");
   });
 });
 

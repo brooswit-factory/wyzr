@@ -95,6 +95,77 @@ All notable changes to this project are documented in this file.
     `src/transport-fake.ts`'s own convention — see `docs/capture-format.md`
     for the full spec and a worked, synthetic-data example end to end.
 
+- `wyzr rehearse-safe-plug-write` (WYZR-20/WYZR-30) — the staged rehearsal
+  of this product's FIRST real plug write. `plug on`/`plug off`, and
+  therefore `wyzr cycle` itself, have never run through this product's
+  code, by anyone, ever; this command is what will move the write path
+  from "never exercised" to "exercised, once, on a date a human executor
+  records" — **when a human runs it, not when this merged.** See
+  `docs/write-rehearsal-procedure.md` for the executor procedure, and
+  README's own section for the design.
+  - **Safe-plug-only, two independent guards.** Typed to accept ONLY
+    `SafePlugTarget` (WYZR-28's branded config types) — a `FleetPlugTarget`
+    is a compile error, mutation-tested with a `@ts-expect-error` pin —
+    PLUS an independent runtime check (`src/config.ts`'s own
+    `samePlugIdentity()`, reused, now exported) that refuses BEFORE any
+    read or write if the two plugs resolve to the same device. Provably
+    unreachable through the real CLI today (`loadWyzrConfig()` already
+    refuses a conflated config at load time) and kept anyway, on the exact
+    precedent `src/cli-cycle.ts`'s `resolveForced()` sets for its own
+    defensive "unreachable in practice" branch. No CLI positional argument
+    names the target, ever — an extra/unrecognized argument is a Usage
+    error, not a silently-accepted device query.
+  - **No path ends with the plug off.** Reuses `src/cycle-runner.ts`'s own
+    exported `performOff()`/`performRestoreNeverGiveUp()`/`describeOff()`/
+    `describeRestore()` UNCHANGED (newly exported for this purpose) — one
+    at-most-once-OFF/never-give-up-ON implementation in this codebase, not
+    two that could diverge. Every constructed failure case (the OFF write
+    throws, the OFF read-back throws, the OFF read-back says "unknown",
+    the restore itself throws on every attempt) still attempts the restore
+    and reports the outcome; an unconfirmed restore is `stranded`,
+    reported as loudly as `wyzr cycle`'s own `CycleStranded` — instructing
+    the executor to restore the SAFE plug by hand, since (unlike the fleet
+    plug) there is no configured remote restore command for it.
+  - **A human-chosen-moment confirmation ceremony**, same D4 precedent as
+    `wyzr cycle`'s own force ceremony: a long explicit flag
+    (`--confirm-write-i-have-chosen-this-moment`), the full unwritten
+    preview printed before anything is acted on, and an interactive-or-
+    non-interactive confirmation naming the safe plug's exact configured
+    name. With NO flags at all — or with `--dry-run` — this command runs
+    the same preview and never writes; the confirm flag alone is never
+    sufficient.
+  - `wyzr doctor` remains structurally incapable of reaching this write
+    path — `test/unit/doctor-imports.test.ts`'s import-closure walk now
+    also forbids `src/rehearsal-runner.ts`/`src/cli-rehearsal.ts`,
+    extended and watched failing first (a temporary import wired from
+    `src/cli-doctor.ts`, captured failing, then reverted).
+    `test/unit/doctor-no-write.test.ts` needed no change: its own scanned
+    set derives from the same closure, so it excludes this command's files
+    automatically as long as they stay unreachable.
+  - New exit codes `30`-`33`
+    (`rehearsal_refused_same_as_fleet_plug`/`rehearsal_refused_by_precondition`/
+    `rehearsal_preview_would_write`/`rehearsal_stranded`), append-only from
+    `29`. `confirmed` reuses `0`.
+  - No new config surface: reuses `config.fleetPlug`/`config.safePlug`
+    (required, WYZR-28) and `config.cycle.timing` (WYZR-19/WYZR-27)
+    unchanged.
+  - `src/rehearsal-paste-back.ts` (review finding 2): the generic
+    `redactAddressesForPasteBack()` alone was measured to miss the safe
+    plug's own configured NAME in every case and its MAC in every
+    spelling but one (a colon-form mac only survived by accident, matching
+    the IPv6-candidate pattern). `renderRehearsalForPasteBack()` elides
+    this run's own `mac`/`name`/`subDeviceId` by VALUE, regardless of
+    spelling, composed with the address redaction — the one function
+    `docs/write-rehearsal-procedure.md` now points the executor at.
+  - `docs/write-rehearsal-procedure.md` (review finding 1): a new,
+    first-in-section step requires the executor to confirm the safe plug
+    does not power the machine running the command before proceeding — if
+    it does, the OFF would cut power to the process itself, and the
+    never-give-up restore (which needs the process alive to retry) never
+    runs. No code can detect this; "no path ends with the plug off" is now
+    stated everywhere as holding for every failure the running process
+    SURVIVES, not for the process being killed mid-run.
+
 - The post-cycle recovery engine and `wyzr recovery status` (WYZR-18/WYZR-25)
   — a read-only command answering "did that power cycle actually work?" with
   evidence, not assumption. **Ships no plug-switching capability at all, and

@@ -7,6 +7,15 @@
 // `formatWedgeStatusHuman()` and src/cli-recovery.ts's
 // `toRecoveryStatusJson()`/`formatRecoveryStatusHuman()` verbatim — composed,
 // not reimplemented, same rule the ticket applies to the engines themselves.
+//
+// EXPORTED FOR REUSE (WYZR-20/WYZR-30): projectOff()/projectRestore()/
+// projectRestoreAttempt()/projectReadBack()/offSection()/restoreSection()/
+// readBackLine() render OffAttemptEvidence/RestoreEvidence (src/cycle.ts) —
+// generic over those two shapes, nothing gate/wrong-box/recovery-specific.
+// src/rehearsal-report.ts reuses these UNCHANGED for the OFF/restore
+// portions of its own `--json`/human rendering, rather than re-deriving the
+// same projection twice. Additive visibility change only — no rendering
+// here is altered.
 
 import { ExitCode } from "./errors.ts";
 import { toWedgeStatusJson, formatWedgeStatusHuman, type WedgeStatusJson } from "./cli-wedge.ts";
@@ -110,7 +119,7 @@ export interface CycleJson {
   handRestoreCommand: string | null;
 }
 
-function projectReadBack(r: ReadBackAttemptEvidence): CycleReadBackJson {
+export function projectReadBack(r: ReadBackAttemptEvidence): CycleReadBackJson {
   return {
     attempt: r.attempt,
     atMs: r.atMs,
@@ -121,7 +130,7 @@ function projectReadBack(r: ReadBackAttemptEvidence): CycleReadBackJson {
   };
 }
 
-function projectOff(off: OffAttemptEvidence): CycleOffJson {
+export function projectOff(off: OffAttemptEvidence): CycleOffJson {
   return {
     writeThrew: off.writeThrew,
     writeErrorMessage: off.writeErrorMessage,
@@ -130,7 +139,7 @@ function projectOff(off: OffAttemptEvidence): CycleOffJson {
   };
 }
 
-function projectRestoreAttempt(a: RestoreAttemptEvidence): CycleRestoreAttemptJson {
+export function projectRestoreAttempt(a: RestoreAttemptEvidence): CycleRestoreAttemptJson {
   return {
     attempt: a.attempt,
     atMs: a.atMs,
@@ -141,7 +150,7 @@ function projectRestoreAttempt(a: RestoreAttemptEvidence): CycleRestoreAttemptJs
   };
 }
 
-function projectRestore(restore: RestoreEvidence): CycleRestoreJson {
+export function projectRestore(restore: RestoreEvidence): CycleRestoreJson {
   return {
     attempts: restore.attempts.map(projectRestoreAttempt),
     confirmed: restore.confirmed,
@@ -172,11 +181,11 @@ export function toCycleJson(result: CycleResult): CycleJson {
   };
 }
 
-function readBackLine(r: ReadBackAttemptEvidence): string {
+export function readBackLine(r: ReadBackAttemptEvidence): string {
   return `      #${r.attempt} @${r.atMs}ms: ${r.result} (power=${r.reading.power}, reachable=${String(r.reading.reachable)})${r.reading.note ? ` — ${r.reading.note}` : ""}`;
 }
 
-function offSection(off: OffAttemptEvidence): string[] {
+export function offSection(off: OffAttemptEvidence): string[] {
   const lines = [
     "OFF:",
     `  write ${off.writeThrew ? `threw: ${off.writeErrorMessage}` : "was issued (exactly once)"}`,
@@ -186,7 +195,7 @@ function offSection(off: OffAttemptEvidence): string[] {
   return lines;
 }
 
-function restoreSection(restore: RestoreEvidence): string[] {
+export function restoreSection(restore: RestoreEvidence): string[] {
   const lines = [
     "RESTORE (never-give-up):",
     `  ${restore.attempts.length} ON write attempt(s) over ${restore.elapsedMs}ms — ${restore.confirmed ? "CONFIRMED" : "NEVER CONFIRMED"}`,
