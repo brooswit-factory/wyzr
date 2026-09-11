@@ -152,6 +152,36 @@ export const ExitCode = {
    * (e.g. `config_missing`, `config_file_mode`, `config_field_missing`,
    * `config_plug_conflation`) for the finer-grained detail. */
   ConfigInvalid: 26,
+  /** `wyzr doctor` (WYZR-29): at least one check the doctor ran
+   * affirmatively FAILED — config or credentials present but broken, a
+   * login attempt did not succeed, a configured plug could not be resolved
+   * or read, or the wrong-box guard affirmatively found this machine IS the
+   * configured target. An OUTCOME code, same class as WedgeNotProven/
+   * RecoveryNotRecovered/CycleRefusedByGate above: the doctor ran every
+   * check it could and is reporting exactly what it observed — nothing was
+   * touched, since `wyzr doctor` is structurally read-only (see
+   * test/unit/doctor-imports.test.ts). See src/doctor.ts's evaluateDoctorVerdict()
+   * for the precedence this is derived from. */
+  DoctorNotReady: 27,
+  /** `wyzr doctor` only: nothing affirmatively failed, but at least one
+   * check that WAS attempted (config and credentials both loaded, or a
+   * genuine I/O attempt was made) could not be read — a DNS/hosts-file
+   * lookup failed, a plug's P3/P5 came back undecodable, an instrument
+   * probe timed out. Same "could-not-look outranks an unconfigured gap"
+   * reasoning as ExitCode.RecoveryInconclusive; its own code for the same
+   * reason CycleRecoveryInconclusive's comment gives — this file's own rule
+   * is that an existing entry is never reordered, reused, or modified. */
+  DoctorInconclusive: 28,
+  /** `wyzr doctor` only: nothing failed and nothing was unreadable; the
+   * only gaps are things nobody ever pointed anywhere — no config.json at
+   * all (a fresh install before setup), or an optional section (jira/
+   * github/...) simply never configured. Distinguished from
+   * DoctorNotReady/DoctorInconclusive for the same reason
+   * ExitCode.RecoveryUnconfigured is distinguished from
+   * RecoveryInconclusive: "you never told me where to look" is an
+   * operator-fixable setup gap, never possible evidence of a broken
+   * install. */
+  DoctorUnconfigured: 29,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -188,6 +218,9 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.CycleRecoveryInconclusive]: "cycle_recovery_inconclusive",
   [ExitCode.CycleRecoveryUnconfigured]: "cycle_recovery_unconfigured",
   [ExitCode.ConfigInvalid]: "config_invalid",
+  [ExitCode.DoctorNotReady]: "doctor_not_ready",
+  [ExitCode.DoctorInconclusive]: "doctor_inconclusive",
+  [ExitCode.DoctorUnconfigured]: "doctor_unconfigured",
 };
 
 export class CliError extends Error {
