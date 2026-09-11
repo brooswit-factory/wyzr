@@ -14,3 +14,11 @@ coverage/
 # filename; this is a backstop, not a substitute for that rule.
 *credentials*.json
 *.log
+
+# WYZR-20/WYZR-28: the real config.json (src/config.ts's loadWyzrConfig())
+# carries host-specific facts and, when Jira/GitHub are configured, real
+# secrets — it must never be committed. Anchored to the repo root only
+# (leading slash) so it does not shadow docs/config.example.json (a
+# DIFFERENT filename anyway, deliberately — see that file's own name) or
+# any future nested fixture that might legitimately need this name.
+/config.json

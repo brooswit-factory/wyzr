@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ExitCode } from "../../src/errors.ts";
+import { CliError, ExitCode } from "../../src/errors.ts";
 import {
   defaultWedgeStatusDeps,
   runWedgeStatus,
@@ -244,8 +244,24 @@ describe("defaultWedgeStatusDeps — the real (production) wiring, exercised onl
     expect(defaultWedgeStatusDeps.createProbes()).toBeInstanceOf(RealWedgeProbes);
   });
 
-  test("loadConfig() returns a WedgeConfig with at least localConnectivity populated", () => {
-    const config = defaultWedgeStatusDeps.loadConfig();
-    expect(config.localConnectivity).toBeDefined();
+  // WYZR-20/WYZR-28: loadConfig() now reads a REAL config.json from disk
+  // (src/config.ts's loadWyzrConfig()) via purely local filesystem I/O
+  // (zero network, zero credentials) — same category of "real, local-only
+  // call" this repo already exercises directly elsewhere (e.g.
+  // test/unit/cycle-wrong-box.test.ts's "the real (uninjected) probe
+  // actually enumerates this process's own network addresses" tests). This
+  // machine may or may not have a real config.json, so both outcomes are
+  // accepted: either a real WedgeConfig comes back, or the loader refuses
+  // with its own ConfigInvalid exit code — anything else is a bug this test
+  // would catch. The loader's own full refusal/shape behavior is covered
+  // exhaustively by test/unit/config.test.ts against fixture files.
+  test("loadConfig() either returns a real WedgeConfig or refuses with ConfigInvalid — never anything else", () => {
+    try {
+      const config = defaultWedgeStatusDeps.loadConfig();
+      expect(config.localConnectivity).toBeDefined();
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).exitCode).toBe(ExitCode.ConfigInvalid);
+    }
   });
 });

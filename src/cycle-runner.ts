@@ -439,7 +439,7 @@ export async function runCycleLive(plug: PlugWriter, deps: CycleRunnerDeps): Pro
   preamble.reasons.push(describeRestore(restore));
 
   if (!restore.confirmed) {
-    const command = deps.handRestoreCommand ?? "(no hand-restore command configured — set WYZR_CYCLE_HAND_RESTORE_COMMAND)";
+    const command = deps.handRestoreCommand ?? '(no hand-restore command configured — set "cycle.handRestoreCommand" in config.json)';
     preamble.reasons.push(
       `STRANDED: power is OFF. The restore was NOT confirmed within ${deps.timing.restoreTimeoutMs}ms. ` +
         `Restore it by hand: ${command}`,

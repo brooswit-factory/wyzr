@@ -1,0 +1,70 @@
+{
+  "suspectBox": {
+    "host": "suspect-box.example.invalid",
+    "timeoutMs": 5000,
+    "connectTimeoutMs": 3000
+  },
+  "tunnelPing": {
+    "host": "tunnel.example.invalid",
+    "timeoutMs": 5000,
+    "connectTimeoutMs": 3000
+  },
+  "jira": {
+    "baseUrl": "https://your-org-example.atlassian.net",
+    "authHeader": "Basic ZmFrZS1wbGFjZWhvbGRlci1kby1ub3QtdXNl",
+    "projectKey": "EXAMPLEPROJ",
+    "quietThresholdMs": 600000,
+    "timeoutMs": 5000
+  },
+  "github": {
+    "owner": "example-org",
+    "repo": "example-repo",
+    "token": "ghp_example_placeholder_token_do_not_use",
+    "quietThresholdMs": 600000,
+    "timeoutMs": 5000
+  },
+  "localConnectivity": {
+    "target": "1.1.1.1",
+    "timeoutMs": 5000
+  },
+  "controlPlane": {
+    "name": "tailscale",
+    "timeoutMs": 5000
+  },
+  "recovery": {
+    "uptimeTimeoutMs": 5000,
+    "daemon": {
+      "unit": "example.service",
+      "scope": "user",
+      "timeoutMs": 5000
+    },
+    "fleetAudit": {
+      "processMatch": "example-agent-binary-name",
+      "expectedFlags": ["--example-flag-a", "--example-flag-b"],
+      "timeoutMs": 5000
+    }
+  },
+  "cycle": {
+    "handRestoreCommand": "example-restore-command --by-hand --plug example-fleet-plug",
+    "timing": {
+      "offToOnWaitMs": 5000,
+      "offReadbackPollIntervalMs": 2000,
+      "offReadbackBoundMs": 20000,
+      "restoreReadbackPollIntervalMs": 2000,
+      "restoreReadbackBoundMs": 20000,
+      "restorePollIntervalMs": 10000,
+      "restoreTimeoutMs": 300000
+    }
+  },
+  "fleetPlug": {
+    "mac": "AABBCCDDEEFF",
+    "model": "WLPP1CFH",
+    "name": "example-fleet-plug"
+  },
+  "safePlug": {
+    "mac": "112233445566",
+    "model": "WLPPO",
+    "name": "example-safe-rehearsal-plug",
+    "subDeviceId": "112233445566-SUB1"
+  }
+}

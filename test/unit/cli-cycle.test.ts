@@ -213,7 +213,7 @@ describe("runCycleCommand — named test 6: force flag WITHOUT its confirmation 
     const deps = baseDeps({ loadConfig: () => fixtureConfig({ wrongBoxTargetHost: undefined }) });
     await expect(
       runCycleCommand(deps, "Test Plug", false, { dryRun: true, force: true, nonInteractiveConfirmTarget: undefined }),
-    ).rejects.toThrow(/requires WYZR_CYCLE_WRONG_BOX_TARGET_HOST to be configured/);
+    ).rejects.toThrow(/requires "suspectBox.host" to be configured in config.json/);
     ui.restore();
   });
 });
@@ -363,9 +363,22 @@ describe("defaultCycleCommandDeps — real wiring constructors (construction onl
   test("createIdentityProbe() constructs a RealWrongBoxIdentityProbe", () => {
     expect(defaultCycleCommandDeps.createIdentityProbe()).toBeInstanceOf(RealWrongBoxIdentityProbe);
   });
-  test("clock is RealCycleClock, and loadConfig() reads real env without touching the network", () => {
+  // WYZR-20/WYZR-28: loadConfig() now reads a REAL config.json from disk
+  // (src/config.ts's loadWyzrConfig()) — see cli-wedge.test.ts's identical
+  // comment for the "real, local-only I/O" precedent and why both outcomes
+  // (a real config, or a ConfigInvalid refusal) are accepted here, rather
+  // than the "everything unconfigured" env this test used to exercise for
+  // free. The loader's own full behavior is covered exhaustively by
+  // test/unit/config.test.ts against fixture files.
+  test("clock is RealCycleClock, and loadConfig() either returns a real CycleConfig or refuses with ConfigInvalid", () => {
     expect(defaultCycleCommandDeps.clock).toBe(RealCycleClock);
-    expect(defaultCycleCommandDeps.loadConfig().wrongBoxTargetHost).toBeUndefined();
+    try {
+      const config = defaultCycleCommandDeps.loadConfig();
+      expect(config.timing).toBeDefined();
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).exitCode).toBe(ExitCode.ConfigInvalid);
+    }
   });
 });
 

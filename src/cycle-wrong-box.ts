@@ -262,6 +262,34 @@ export function evaluateWrongBoxGuard(
     };
   }
 
+  // WYZR-28: THE EMPTY-SET HOLE. An empty (but non-null) `targetAddresses`
+  // array used to fall straight through the `=== null` check above,
+  // reach the final "not_target" branch, and CLEAR VACUOUSLY (an empty
+  // set trivially "overlaps nothing" with anything) — on a verb that cuts
+  // mains power. Same voice, same outcome, as the `null` branch just
+  // above: "the target could not be resolved" and "the target resolved to
+  // NOTHING" are the same kind of missing evidence from this function's
+  // point of view, so both REFUSE rather than one of them proceeding.
+  // Unreachable through shipped code today
+  // (`RealWrongBoxIdentityProbe.resolveTargetAddresses()` converts an
+  // empty resolver result to `null` in exactly one place, pinned by its
+  // own "returns null ... when the injected resolver resolves to zero
+  // addresses" test) — this is the defense-in-depth fix at the PURE CORE
+  // itself, so the hole cannot reopen if that one conversion is ever
+  // removed or a second caller ever hands this function a raw resolver
+  // result directly.
+  if (targetAddresses.length === 0) {
+    return {
+      outcome: "inconclusive",
+      reasons: [
+        `wrong-box guard: the configured target ("${configuredTarget}") resolved an EMPTY address list from this ` +
+          "machine (DNS/hosts-file lookup succeeded but returned nothing) — cannot affirmatively establish this " +
+          "machine is NOT the target, so this REFUSES (err tight, D7); this resolution never contacts the target " +
+          "itself, so a powered-off target is not why this failed — check DNS/hosts-file configuration",
+      ],
+    };
+  }
+
   if (localAddresses.length === 0) {
     return {
       outcome: "inconclusive",

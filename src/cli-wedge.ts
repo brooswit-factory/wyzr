@@ -17,7 +17,8 @@ import { ExitCode } from "./errors.ts";
 import { printHuman, printJson } from "./output.ts";
 import { RealWedgeProbes } from "./wedge-probes-real.ts";
 import type { WedgeProbes } from "./wedge-probes.ts";
-import { loadWedgeConfigFromEnv, type WedgeConfig } from "./wedge-config.ts";
+import type { WedgeConfig } from "./wedge-config.ts";
+import { loadWyzrConfig } from "./config.ts";
 import { runWedgeCheck } from "./wedge-runner.ts";
 import {
   WedgeVerdict,
@@ -36,7 +37,7 @@ export interface WedgeStatusDeps {
 }
 
 export const defaultWedgeStatusDeps: WedgeStatusDeps = {
-  loadConfig: () => loadWedgeConfigFromEnv(),
+  loadConfig: () => loadWyzrConfig().wedge,
   createProbes: () => new RealWedgeProbes(),
 };
 

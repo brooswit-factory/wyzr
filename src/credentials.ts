@@ -45,8 +45,25 @@ const OPTIONAL_STRING_FIELDS = ["totpSecret"] as const;
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_STRING_FIELDS, ...OPTIONAL_STRING_FIELDS]);
 
 /** `$XDG_CONFIG_HOME/wyzr` when XDG_CONFIG_HOME is set and non-empty,
- * else `$HOME/.config/wyzr`. */
-export function credentialsDir(env: CredentialsEnv = systemEnv): string {
+ * else `$HOME/.config/wyzr` — the ONE directory-resolution rule every
+ * file this CLI reads from disk shares. Exported (WYZR-20/WYZR-28) so
+ * `src/config.ts`'s `config.json` loader reuses this exact resolution
+ * rather than writing a second one, which is how a config file and a
+ * credentials file could otherwise end up looking in two different
+ * places for no reason — this module is "internal, free to change" per
+ * README's published-interface section, so widening its export surface
+ * for another module in this repo to reuse is safe. `credentialsDir`
+ * below is kept as a same-behavior alias: it names what THIS file uses
+ * this resolution for, and every existing caller/test keeps working
+ * unchanged.
+ *
+ * The error path here throws `ExitCode.CredentialsInvalid` even when the
+ * caller is `src/config.ts` — this failure ("no config directory can be
+ * located at all") happens before either file's own identity is known,
+ * so there is no more specific exit code to prefer; `src/config.ts`'s own
+ * `ExitCode.ConfigInvalid` is for a config.json this function successfully
+ * located a directory for. */
+export function wyzrConfigDir(env: CredentialsEnv = systemEnv): string {
   const xdg = env.XDG_CONFIG_HOME;
   if (xdg && xdg.length > 0) {
     return join(xdg, "wyzr");
@@ -61,6 +78,10 @@ export function credentialsDir(env: CredentialsEnv = systemEnv): string {
   }
   return join(home, ".config", "wyzr");
 }
+
+/** Same-behavior alias for `wyzrConfigDir` — kept so this module's own
+ * existing name/usage (and `test/unit/credentials.test.ts`) is untouched. */
+export const credentialsDir = wyzrConfigDir;
 
 export function credentialsPath(env: CredentialsEnv = systemEnv): string {
   return join(credentialsDir(env), "credentials.json");

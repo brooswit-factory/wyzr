@@ -6,6 +6,47 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- The single, file-backed configuration surface (WYZR-20/WYZR-28):
+  `src/config.ts`'s `loadWyzrConfig()` replaces the three provisional
+  env-var loaders (`loadWedgeConfigFromEnv`/`loadRecoveryConfigFromEnv`/
+  `loadCycleConfigFromEnv`, all removed) with ONE validated JSON file at
+  `<XDG_CONFIG_HOME or $HOME/.config>/wyzr/config.json`, resolved by the
+  same rule `src/credentials.ts` uses for `credentials.json`. The CLI now
+  reads nothing from the environment for configuration — a dedicated test
+  pins that no `WYZR_*` env var can influence the loaded config.
+  - Mirrors `src/credentials.ts`'s own discipline: refuses an
+    over-permissive directory or file, an unknown top-level field, a
+    missing/mistyped required value, and a present-but-incomplete
+    optional section — never a silent default, never a partial load,
+    never an error message that echoes a config value. ONE new exit code
+    (`ExitCode.ConfigInvalid`, 26), distinguished by `reason`, mirroring
+    `credentials_invalid`'s own precedent.
+  - `suspectBox.host` is now the single REQUIRED value feeding the ssh
+    direct path, the wrong-box guard's target, and the reused
+    uptime/daemon/fleet-audit host — deliberately one field, not several
+    that could silently disagree about which box is wedged and which box
+    a power cycle would cut.
+  - The fleet plug and the safe plug (`fleetPlug`/`safePlug`, both
+    required) are branded as `FleetPlugTarget`/`SafePlugTarget`, two
+    structurally unrelated types (a module-private `unique symbol` brand
+    each, same technique as `PreconditionsClearedWitness`) so a
+    safe-plug-only operation can never type-check against the fleet
+    plug — pinned with a mutation-tested `@ts-expect-error` test. A
+    config where both plugs resolve to the same device is refused at
+    load time. The schema can express a sub-device target
+    (`subDeviceId`), for an `OutdoorPlug` (`WLPPO`)'s `-SUB` children.
+  - `docs/config.example.json`: a complete, placeholder-only, genuinely
+    loadable example of every required key and optional section (a test
+    loads it directly). `.gitignore` makes an accidental `/config.json`
+    in the repo root impossible to commit.
+  - `src/cycle-wrong-box.ts`'s `evaluateWrongBoxGuard()`: closed the
+    empty-resolved-address-set hole — an empty (but non-null) array used
+    to fall through to `not_target` (clearing vacuously on a verb that
+    cuts mains power); it now refuses (`inconclusive`), same as a `null`
+    result. Watched failing first; the structural pin that
+    `RealWrongBoxIdentityProbe` still converts an empty resolver result
+    to `null` was already in place from WYZR-27.
+
 - The post-cycle recovery engine and `wyzr recovery status` (WYZR-18/WYZR-25)
   — a read-only command answering "did that power cycle actually work?" with
   evidence, not assumption. **Ships no plug-switching capability at all, and
