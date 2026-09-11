@@ -80,7 +80,7 @@ export interface CycleOffJson {
   writeThrew: boolean;
   writeErrorMessage: string | null;
   readBacks: CycleReadBackJson[];
-  finalResult: WriteResult | "never_read";
+  finalResult: WriteResult;
 }
 
 export interface CycleRestoreAttemptJson extends CycleOffJson {

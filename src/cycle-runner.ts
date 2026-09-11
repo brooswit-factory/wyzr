@@ -274,7 +274,7 @@ async function performOff(
     writeThrew,
     writeErrorMessage,
     readBacks: attempts,
-    finalResult: attempts.length > 0 ? final : "never_read",
+    finalResult: final,
   };
 }
 
@@ -322,7 +322,7 @@ async function performRestoreNeverGiveUp(plug: PlugWriter, clock: CycleClock, ti
       writeThrew,
       writeErrorMessage,
       readBacks,
-      finalResult: readBacks.length > 0 ? final : "never_read",
+      finalResult: final,
     });
 
     if (final === "confirmed") {

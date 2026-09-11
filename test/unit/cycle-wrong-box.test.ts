@@ -75,6 +75,31 @@ describe("evaluateWrongBoxGuard — not_target (affirmatively established differ
   });
 });
 
+describe("evaluateWrongBoxGuard — the REAL, OPEN gap: a DNS alias/CNAME or a container/VM hostname divergence is NOT detected (caught by review, 2026-09-11)", () => {
+  // An earlier version of this function's doc comment (and the README's
+  // own description) claimed every one of these three cases returns
+  // "inconclusive" — that was false, and this test pins the TRUE
+  // behavior so that claim can never quietly return. The falsification
+  // criterion, stated before running it: if the retired claim were true,
+  // all three rows below would read "inconclusive". Only the IP-vs-
+  // hostname row actually does.
+
+  test("a DNS-alias-shaped target differing from the local hostname string -> not_target (PROCEEDS) — this function performs no DNS resolution and cannot know they might be the same machine", () => {
+    const result = evaluateWrongBoxGuard("fleetbox.internal.example", "srv-07");
+    expect(result.outcome).toBe("not_target");
+  });
+
+  test("a container-hostname-shaped local identity differing from a physical-host-shaped target -> not_target (PROCEEDS) — this function performs no container/host identity query", () => {
+    const result = evaluateWrongBoxGuard("physicalhost", "a3f9c21b4e77");
+    expect(result.outcome).toBe("not_target");
+  });
+
+  test("only the IP-vs-hostname FORMAT mismatch among these three shapes actually refuses (inconclusive), confirming the other two are the genuine open gap, not a broader pattern", () => {
+    const result = evaluateWrongBoxGuard("10.9.8.7", "srv-07");
+    expect(result.outcome).toBe("inconclusive");
+  });
+});
+
 describe("RealLocalIdentityProbe", () => {
   test("getLocalHostname() returns this process's own hostname as a non-empty string in this environment", async () => {
     // This is the ONLY place this probe reads from — os.hostname() — no

@@ -55,7 +55,15 @@ export interface OffAttemptEvidence {
   readonly writeThrew: boolean;
   readonly writeErrorMessage: string | null;
   readonly readBacks: readonly ReadBackAttemptEvidence[];
-  readonly finalResult: WriteResult | "never_read";
+  /** `src/cycle-runner.ts`'s `readBackWithRetry()` always performs at
+   * least one read before it can return (its loop pushes an attempt
+   * before any `return` statement), so `readBacks` is never empty here —
+   * this is always a REAL classification, never a placeholder for "no
+   * read happened." (Caught by review, 2026-09-11: an earlier version of
+   * this field admitted a `"never_read"` sentinel for a branch that was
+   * provably unreachable by that same construction — dead code removed
+   * rather than left to imply a case that could not occur.) */
+  readonly finalResult: WriteResult;
 }
 
 export interface RestoreAttemptEvidence {
@@ -64,7 +72,9 @@ export interface RestoreAttemptEvidence {
   readonly writeThrew: boolean;
   readonly writeErrorMessage: string | null;
   readonly readBacks: readonly ReadBackAttemptEvidence[];
-  readonly finalResult: WriteResult | "never_read";
+  /** Same guarantee as `OffAttemptEvidence.finalResult` above — always a
+   * real classification. */
+  readonly finalResult: WriteResult;
 }
 
 export interface RestoreEvidence {

@@ -2339,32 +2339,57 @@ REPORTS its finding rather than skipping the check).
 
 **The trap this guard creates rather than solves: an instrument that cannot
 see the failure it exists to catch.** A naive guard compares a configured
-hostname string to the local hostname and PASSES ("not the same box")
-whenever they merely differ in FORM — FQDN vs short name, an alias, a case
-difference, an IP vs a name, an unset config read as empty-string-not-equal.
-That guard never actually identifies the box; it just fails to notice a
-match. **Err tight instead: the guard only ever returns "not the target"
-when it can AFFIRMATIVELY show the two names are different. Every other
-case — including every case a naive `!==` would have silently passed — is
-"inconclusive" and REFUSES.**
+hostname string to the local hostname with a bare `!==` and PASSES ("not
+the same box") whenever they merely differ in FORM — a case difference,
+whitespace, or an FQDN vs its own short name — even though those three
+shapes plainly name the SAME machine. `evaluateWrongBoxGuard()` normalises
+(trim, lowercase, and compares both the full and short-name form) before
+comparing, and separately REFUSES outright, never guessing, in exactly
+three cases where it cannot even perform a direct comparison at all: no
+configured target, an unreadable local identity, or the two identities
+being in different FORMATS (an IP literal against a hostname — this guard
+performs no DNS resolution, so it cannot tell whether they name the same
+machine).
 
-**What the normalisation covers:** leading/trailing whitespace, case, and
-FQDN-vs-short-name (both the full normalised string and the short name
-before the first `.` are compared; a match on either is treated as the SAME
-machine — the false-"same" direction is the SAFE direction here, since this
-guard's whole job is to catch sameness).
+**CORRECTION (caught by review, 2026-09-11): an earlier version of this
+section claimed more than the code above actually does.** It said every
+gap the normalisation cannot close — including a DNS alias/CNAME and a
+container/VM hostname diverging from its physical host's own name — falls
+on the refuse side. **That was false, and it was caught by measurement,
+not inspection:** `evaluateWrongBoxGuard("fleetbox.internal.example",
+"srv-07")` (a DNS-alias-shaped divergence) and
+`evaluateWrongBoxGuard("physicalhost", "a3f9c21b4e77")` (a container-
+hostname-shaped divergence) both return `"not_target"` — the PROCEED side
+— not `"inconclusive"`. Only the IP-vs-hostname format mismatch actually
+refuses. The stated property was exactly this epic's own founding
+failure — the product asserting something untrue about its own knowledge —
+one layer out, in documentation rather than in a `reasons` string.
 
-**What it does NOT cover, on purpose — each is a case where the guard
-returns "inconclusive" rather than guessing "not the target":** it does not
-resolve DNS (a CNAME or alias this project has never heard of); it does not
-compare an IP literal against a hostname (no reverse/forward lookup is
-performed — an IP-shaped target compared against a hostname-shaped local
-identity, or vice versa, is always inconclusive); and it knows nothing
-about a container/VM hostname diverging from its physical host's own name.
-Any of these is a REAL way for the two identities to name the same machine
-without matching here — which is exactly why an inconclusive comparison
-REFUSES: a false "not the target" is the dangerous direction for this
-specific guard.
+**What the normalisation covers, stated accurately:** for two identities in
+the SAME format (both look like hostnames, or both look like IP literals),
+leading/trailing whitespace, case, and FQDN-vs-short-name (both the full
+normalised string and the short name before the first `.` are compared; a
+match on either is treated as the SAME machine — the false-"same" direction
+is the SAFE direction here, since matching two representations of the
+identical hostname is harmless).
+
+**What remains a REAL, OPEN gap, not something "inconclusive" absorbs:** a
+DNS alias/CNAME, or a container/VM hostname diverging from its physical
+host's own name, are NOT detected. Two strings that differ for either of
+those reasons but genuinely name the same machine will read `"not_target"`
+here, and the run proceeds. This is deliberate, not an oversight — resolving
+DNS or querying a container/VM's own physical-host identity would turn this
+pure, synchronous, zero-I/O string comparison into a call that can itself
+fail, hang, be spoofed, or simply disagree with the manager's own view of
+the network, trading one risk (an undetected alias) for another (a guard
+whose correctness now depends on DNS/container infrastructure this repo
+does not control). **The gap is closed by CONFIGURATION discipline instead:
+set `WYZR_CYCLE_WRONG_BOX_TARGET_HOST` to the EXACT string `os.hostname()`
+returns when run ON the machine `wyzr cycle` is meant to cut — never a DNS
+alias, a CNAME, or a name inferred from outside that machine.** An operator
+can confirm this by running `hostname` (or `wyzr cycle <device> --dry-run`,
+which reports the guard's own finding) ON the target machine itself and
+comparing it byte-for-byte against the configured value.
 
 This machine's own identity is read from exactly one place —
 `src/cycle-wrong-box.ts`'s `RealLocalIdentityProbe`, Node/Bun's own
