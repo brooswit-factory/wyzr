@@ -41,6 +41,12 @@ describe("ExitCode", () => {
       ExitCode.AmbiguousDevice,
       ExitCode.StateUnknown,
       ExitCode.WriteContradicted,
+      ExitCode.WedgeNotProven,
+      ExitCode.WedgeInconclusiveBySharedCause,
+      ExitCode.RecoveryNotRecovered,
+      ExitCode.RecoveryFleetHalfRestored,
+      ExitCode.RecoveryInconclusive,
+      ExitCode.RecoveryUnconfigured,
     ];
     expect(new Set(codes).size).toBe(codes.length);
   });
@@ -61,6 +67,42 @@ describe("ExitCode", () => {
     expect(ExitCode.AmbiguousDevice).toBe(8);
     expect(ExitCode.StateUnknown).toBe(9);
     expect(ExitCode.WriteContradicted).toBe(10);
+  });
+
+  // WYZR-17 decision: append-only continues — 0-10 must never move.
+  test("0-10 are untouched by WYZR-17's/WYZR-25's additions", () => {
+    expect(ExitCode.Ok).toBe(0);
+    expect(ExitCode.Generic).toBe(1);
+    expect(ExitCode.Usage).toBe(2);
+    expect(ExitCode.CredentialsInvalid).toBe(3);
+    expect(ExitCode.NotFound).toBe(4);
+    expect(ExitCode.Network).toBe(5);
+    expect(ExitCode.ApiError).toBe(6);
+    expect(ExitCode.MfaRequired).toBe(7);
+    expect(ExitCode.AmbiguousDevice).toBe(8);
+    expect(ExitCode.StateUnknown).toBe(9);
+    expect(ExitCode.WriteContradicted).toBe(10);
+  });
+
+  test("WYZR-17 appends 11/12 as wedge_not_proven/wedge_inconclusive_by_shared_cause", () => {
+    expect(ExitCode.WedgeNotProven).toBe(11);
+    expect(ExitCode.WedgeInconclusiveBySharedCause).toBe(12);
+  });
+
+  // WYZR-25 decision: append-only continues — 0-12 must never move. Verified
+  // by reading this repo's highest existing code (12, WYZR-17's) before
+  // appending, per the ticket's explicit instruction to verify rather than
+  // trust a number relayed in the ticket text.
+  test("0-12 are untouched by WYZR-25's additions", () => {
+    expect(ExitCode.WedgeNotProven).toBe(11);
+    expect(ExitCode.WedgeInconclusiveBySharedCause).toBe(12);
+  });
+
+  test("WYZR-25 appends 13/14/15/16 for the four non-RECOVERED recovery verdicts", () => {
+    expect(ExitCode.RecoveryNotRecovered).toBe(13);
+    expect(ExitCode.RecoveryFleetHalfRestored).toBe(14);
+    expect(ExitCode.RecoveryInconclusive).toBe(15);
+    expect(ExitCode.RecoveryUnconfigured).toBe(16);
   });
 });
 

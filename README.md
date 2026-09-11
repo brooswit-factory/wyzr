@@ -9,16 +9,19 @@ see the story ticket for the full motivation.
 
 **Status: foundation + credentials + transport/auth + `devices list` +
 `plug status`/`plug on`/`plug off` + the wedge-proof engine and `wyzr wedge
-status`.** This repo ships the project skeleton, the redaction-proof output
-core, the typed exit-code layer, gating CI, file-backed credentials loading
+status` + the post-cycle recovery engine and `wyzr recovery status`.** This
+repo ships the project skeleton, the redaction-proof output core, the typed
+exit-code layer, gating CI, file-backed credentials loading
 (`src/credentials.ts`), an injectable Wyze transport boundary with a real
 HTTP implementation, a fake implementation, the auth session that logs in,
 handles MFA, and holds/refreshes tokens, `wyzr devices list`, the three verbs
-the whole product exists to provide (`wyzr plug status|on|off`), and now the
-gate that decides whether the destructive power-cycle verb (a later story)
-is ever allowed to run, plus the read-only command that shows its reasoning.
-See "Wyze transport and auth session", "`wyzr devices list`", "`wyzr plug
-status|on|off`", "Live-device coverage", and "`wyzr wedge status`" below.
+the whole product exists to provide (`wyzr plug status|on|off`), the gate
+that decides whether the destructive power-cycle verb (a later story) is
+ever allowed to run plus the read-only command that shows its reasoning, and
+now the read-only command that answers "did the power cycle actually work?"
+after that verb runs. See "Wyze transport and auth session", "`wyzr devices
+list`", "`wyzr plug status|on|off`", "Live-device coverage", "`wyzr wedge
+status`", and "`wyzr recovery status`" below.
 
 **Three different machines are involved, and this matters for everything
 below.** wyzr is installed and run from **the operator's own machine** (call
@@ -52,6 +55,8 @@ Commands:
   plug on <device>        Turn a plug on (read back to confirm).
   plug off <device>       Turn a plug off (read back to confirm).
   wedge status            Report the wedge-proof engine's full evidence trail and verdict (read-only).
+  recovery status --since <ISO-8601 timestamp>
+                          Report post-cycle recovery evidence and verdict (read-only).
 ```
 
 `--json` switches success output to machine-readable JSON on stdout and
@@ -82,11 +87,15 @@ stories — the numbers already assigned here never change or get reused.
 | 10   | `write_contradicted`  | `plug on`/`off` only: the read-back succeeded and shows a state other than the one requested. **This does NOT mean the write failed** — see "Two classes of non-zero exit code" below; it is equally consistent with a write that succeeded and simply had not propagated by the time of this one, immediate, no-wait read. |
 | 11   | `wedge_not_proven`    | `wyzr wedge status` only: the engine's verdict was NOT_PROVEN — see "`wyzr wedge status`" below. This is the default/refuse-by-default reading: a healthy box, a single silent instrument, a live direct path, or an unruled-out shared cause that never got the chance to matter all land here. |
 | 12   | `wedge_inconclusive_by_shared_cause` | `wyzr wedge status` only: the verdict was INCONCLUSIVE_BY_SHARED_CAUSE — the local-connectivity control itself could not be read, so the shared-cause exclusion could not run. Distinct from 11 so a script can tell "not wedged" from "could not look." |
+| 13   | `recovery_not_recovered` | `wyzr recovery status` only: the verdict was NOT_RECOVERED — the box affirmatively did not come back, affirmatively did not reboot, or some other check affirmatively failed. See "`wyzr recovery status`" below. |
+| 14   | `recovery_fleet_half_restored` | `wyzr recovery status` only: the box itself is affirmatively back and rebooted, but the fleet came back with bare (un-flagged) agent processes present — the herdr-restore trap. wyzr detects and reports this; it does not fix it. |
+| 15   | `recovery_inconclusive` | `wyzr recovery status` only: something load-bearing was looked at and could not be read, and nothing affirmatively failed — possible evidence about the box. Distinct from 16 so a script can tell "could not look" from "never configured." |
+| 16   | `recovery_unconfigured` | `wyzr recovery status` only: nothing failed and nothing was unreadable — the only gaps are checks nobody ever pointed anywhere. This is the NORMAL state until WYZR-20 ships. |
 
 Codes 8/9/10 were added by `wyzr plug status|on|off` (WYZR-13); 11/12 were
-added by `wyzr wedge status` (WYZR-17) — both appending only, never
-renumbering or reusing an existing code. 0–7 are unchanged from earlier
-stories.
+added by `wyzr wedge status` (WYZR-17); 13/14/15/16 were added by `wyzr
+recovery status` (WYZR-25) — all appending only, never renumbering or
+reusing an existing code. 0–7 are unchanged from earlier stories.
 
 ### Two classes of non-zero exit code
 
@@ -117,6 +126,14 @@ payload (see "`wyzr wedge status`" below) to stdout and returns the code;
 An error envelope would discard the entire evidence trail — the reasons,
 per-instrument quiet durations, and direct-path results — which is exactly
 the payload this command's whole reason for existing is to preserve.
+
+**Codes `13`/`14`/`15`/`16` are OUTCOME codes too, on the same reasoning.**
+`wyzr recovery status` runs every configured check and is reporting exactly
+what it observed — NOT_RECOVERED, FLEET_HALF_RESTORED, INCONCLUSIVE, or
+UNCONFIGURED are the command *working*, not failing. It prints its normal,
+documented evidence-trail payload (see "`wyzr recovery status`" below) to
+stdout and returns the code; `--json` mode never wraps any of these in the
+`{"error": {...}}` shape either.
 
 **Neither `9` nor `10` is a claim that a write did nothing.** `9` on the
 write path means the write was accepted by Wyze AND its resulting state
@@ -1644,6 +1661,507 @@ this repo's own test suite, never against an actually-wedged remote
 machine. Whether a genuinely frozen box's ssh/ping behavior matches the
 timing model this classifier assumes is, like the rest of this repo's
 device-facing code, unverified against reality until it is.
+
+## `wyzr recovery status`
+
+The post-cycle recovery engine (WYZR-18/WYZR-25) and its read-only CLI
+surface — the thing that answers "did that power cycle actually work?" with
+evidence, not assumption, after the destructive `wyzr cycle` verb (a later
+story) runs. **This command cannot switch a plug, and is not capable of it —
+see "Structurally read-only, and no import path to the plug at all" below.**
+
+```sh
+wyzr recovery status --since 2026-09-11T10:20:00Z           # human-readable
+wyzr recovery status --since 2026-09-11T10:20:00Z --json    # machine-readable, stable shape
+```
+
+`--since` (an ISO 8601 timestamp) is **required, with no default** — it is
+the moment power was cut, supplied by the caller because only the caller
+knows it. Missing, unparseable, or future-dated is a Usage error (`2`),
+never a guess: defaulting to "now minus something" would silently change
+the verdict. This is also designed so a human can run it standalone after
+any unrelated reboot, not only after `wyzr cycle`.
+
+### Why this exists, and the one failure mode it exists to avoid
+
+`wyzr wedge status` (WYZR-16/WYZR-17) was formally reviewed three times and
+bounced twice, and **both defects were the same thing: the product asserted
+something untrue about its own knowledge** — a trail claiming a check that
+never ran, and a verdict claiming an inability the code did not actually
+have. This command's entire output is a claim about the same kind of thing:
+"the box rebooted," "the daemons are healthy," "the fleet came back." Every
+one of those can be false in exactly that way, so every check below is built
+to say **"could not look"** rather than guess, and every line of prose this
+command emits is meant to be true about what was **observed**, never merely
+about what was **attempted**.
+
+### The five checks
+
+Each behind the injectable probe boundary (`src/wedge-probes.ts`'s
+`WedgeProbes`, reused verbatim for four of these — see below — plus this
+story's own `src/recovery-probes.ts`'s `RecoveryProbes` for the three
+genuinely new ones), each reporting **independently rather than collapsing
+early**, each able to say "could not look." Every check reports one of four
+states — `PASS` / `FAIL` / `COULD-NOT-LOOK` / `NOT-CONFIGURED` — the same
+four-way vocabulary the top-level verdict itself uses (see "The verdicts and
+their precedence" below), so the same epistemic distinction the ticket
+demands of the daemon check applies uniformly everywhere.
+
+**1. Reachability** (`src/wedge-probes.ts`'s `checkSsh`/`checkTunnelPing`,
+reused verbatim from WYZR-16 — no second pair of probes). **What output
+would mean FAILURE:** every configured direct path reads `"dead"` or
+`"unconfirmed"` (silence) **while the local-connectivity control is healthy**
+— an affirmatively confounded-free "nothing answered." An `"alive"` reading
+on ANY configured path is `PASS` on its own: it is direct, unconfounded
+evidence (a broken local connection can suppress a reply, but cannot
+manufacture one). Silence while the local-connectivity control is
+**unhealthy, errored, timed out, or unconfigured** is `COULD-NOT-LOOK`, never
+`FAIL` — see "The local-connectivity gate on silence" below for why.
+
+**2. Reboot** (`src/recovery-probes.ts`'s `checkUptime`, new). **What output
+would mean FAILURE:** the box's own uptime (a DURATION, read from its own
+monotonic counter — see "Why the reboot baseline is the power-off instant"
+below) is **not less than** the elapsed time since `--since`. That means the
+box has been up since before the cut and never rebooted — this is exactly
+what catches the cycle verb silently no-opping (a plug that flickered
+without the box actually restarting). A reading that could not be obtained
+or parsed is `COULD-NOT-LOOK`, **never** a pass or a fail, and never falls
+back to a wall-clock method.
+
+**3. Daemon** (`src/recovery-probes.ts`'s `checkDaemon`, new — `systemctl
+[--user] show <unit> --property=LoadState,ActiveState`). Configured unit AND
+scope, **no default for either**. Four distinguishable raw outcomes:
+**healthy** (found, running), **unhealthy** (found, not running),
+**pointed-at-nothing** (`LoadState=not-found` — what a WRONG SCOPE looks
+like; this repo's own sharp edge is that a system-level `journalctl -u
+<unit>` against a user unit prints "-- No entries --", not an error, which
+is why this check uses `systemctl show` and reads its OUTPUT CONTENT rather
+than `journalctl` at all), or a genuine probe failure. **What output would
+mean FAILURE:** `ActiveState` is anything other than `active` on a unit that
+IS loaded (`unhealthy`) — this rolls up to the check-level `FAIL`.
+`pointed-at-nothing` rolls up to `COULD-NOT-LOOK` (we looked in the wrong
+place, never "found it unhealthy") — see "The daemon check's four raw
+outcomes, and why pointed-at-nothing is not a fail" below.
+
+**4. Outside instruments resumed** (`src/wedge-probes.ts`'s
+`checkJiraActivity`/`checkGitHubActivity`, reused verbatim — no second
+pair). **What output would mean FAILURE:** every configured instrument's
+last observed activity is at or before `--since` — silence since before the
+cut proves nothing about recovery, and this stays true even when ssh has
+already returned (the only signal showing the box doing useful WORK, not
+merely being up). At least one configured instrument's activity being AFTER
+`--since` is enough to `PASS`.
+
+**5. The fleet actually came back — the herdr-restore trap**
+(`src/recovery-probes.ts`'s `checkFleetAudit`, new). **What output would
+mean FAILURE:** either zero candidate agent processes are found at all
+("the fleet did not come back" — a different finding from "could not
+look"), or one or more found candidates are missing the configured expected
+spawn flags ("bare" — a pane restored as a bare `claude --resume <id>`,
+looking alive while unable to do anything). The latter shape, when the box
+itself is otherwise confirmed back, is what promotes the top-level verdict
+to its own class, `FLEET_HALF_RESTORED` — see below. Reports **COUNTS
+ONLY**: no session id, token, pid, or raw command line reaches any output
+field on any path, including every error path — see "The fleet-audit
+redaction boundary" below.
+
+### Why the reboot baseline is the power-off instant, and why a duration comparison rather than an instant one
+
+The obvious design — read boot time before the cycle, read it after, assert
+it moved — is **unimplementable**: a wedged box cannot be read BEFORE the
+cut, because being unreadable is what wedged means. The baseline that always
+exists is **the timestamp of the power-off itself**, supplied by the caller
+as `--since` (required, no default — a guess here would silently change the
+verdict).
+
+The required property: after the box returns, its boot must be LATER than
+the moment power was cut — and a box whose clock is behind or ahead must
+produce **neither a false PASS nor a false FAIL**. `who -b`/wall-clock boot
+time is the naive approach, but it reports a WALL-CLOCK instant, and a
+freshly-booted box may not have resynced its clock — comparing that against
+the manager's own `--since` is a comparison between two machines' wall
+clocks after an unclean power loss, not something to build a safety check
+on.
+
+**The skew-safe formulation compares the box's own UPTIME (a duration on its
+own monotonic counter, which no wall-clock skew or NTP step moves) against
+the ELAPSED time since the cut (a duration measured entirely on the
+manager's own clock).** Two durations, each from ONE clock, never a
+cross-machine INSTANT comparison. `uptime < elapsed` means it booted after
+the cut; `uptime >= elapsed` means it has been up since before the cut, so
+it never rebooted and the check FAILS.
+
+**How the uptime duration is obtained:** `cat /proc/uptime` over ssh — its
+first field is seconds since boot, read from the kernel's own monotonic
+clock, never the wall clock. This is Linux-specific, stated here rather than
+promised as portable. A reading this probe cannot parse is `COULD-NOT-LOOK`
+— never a pass, never a fail, and NEVER falls back to a wall-clock method,
+which would reintroduce the exact skew hazard this design removes.
+
+**`elapsedMs` is measured conservatively:** `src/recovery-runner.ts`
+captures the manager's clock BEFORE any probe starts (`now - since`,
+computed from the SAME `now` every probe races against), not from after a
+reply arrives. A later instant would inflate `elapsedMs`, biasing toward
+`uptime < elapsed`, i.e. toward a false PASS — the reasoning is in that
+module's own comment, not just this rule.
+
+### Why plug-liveness is not read at all — not "recorded and powerless," genuinely absent
+
+**This is a deliberate departure from `wyzr wedge status`'s own design.**
+WYZR-16's engine RECORDS a control-plane (tailscale-style) liveness reading
+in its evidence trail, structurally incapable of affecting the verdict.
+**This command goes one step further: it reads no plug-liveness signal at
+all — no `P5`, no `conn_state`, nothing the cloud says about the plug.** Two
+reasons, both settled by the epic:
+
+1. **A structurally powerless signal is not worth the cost of fetching.**
+   The 2026-09-10 hand-run that confirmed the fleet plug measured this
+   directly: the plug's own `P5` (reachability) and `conn_state` properties
+   read live/reachable while saying NOTHING about whether the box behind the
+   plug had actually come back — ssh returning and `who -b` showing a new
+   boot time is what confirmed recovery. `P5`/`conn_state` are this
+   product's own `Online=True` — a cloud control plane asserting liveness
+   about a thing it cannot see inside.
+2. **Reading it would require importing this repo's Wyze transport and plug
+   modules** — precisely the import path "Structurally read-only" below
+   forbids.
+
+**The type-level exclusion still exists and is tested anyway**, because
+WYZR-19 (`wyzr cycle`) WILL hold a plug reading when it calls this engine and
+is the realistic party who would pass one in.
+`src/recovery.ts`'s `PlugLivenessReading` mirrors `src/wedge.ts`'s
+`ControlPlaneReading` exactly: a distinct `__brand` nominal tag and no
+overlapping fields with any evidence-collection type, so a liveness-only
+reading is not assignable into `RecoveryInput.reachability` or
+`RecoveryInput.instruments`, pinned with `@ts-expect-error` the same way
+WYZR-16's own tests pin `ControlPlaneReading`.
+**Verified by actually removing the two directives and observing the
+compiler error** (`tsc` reported `TS2739: Type 'PlugLivenessReading' is
+missing the following properties from type 'RecoveryDirectPathObservation':
+name, outcome` and the equivalent for `RecoveryInstrumentObservation`),
+then restoring them — see the PR description for the full transcript.
+Separately, `test/unit/recovery.test.ts` constructs the case where the box
+is affirmatively gone (silence on every configured check, with the
+local-connectivity control healthy so the silence is unconfounded) and
+asserts `NOT_RECOVERED` — demonstrating that no hypothetical "perfect" plug
+reading could have changed that outcome, because no such reading can ever
+reach `evaluateRecovery()` in the first place.
+
+### The herdr-restore trap, and why wyzr reports rather than fixes it
+
+Live and current, not historical: an agent on this very product was
+restarted for exactly this reason on 2026-09-10. **The restoring component
+brings panes back as a bare `claude --resume <id>`, WITHOUT the daemon's own
+spawn flags.** A restored agent looks alive while missing the flags that
+make it able to do anything — a pane with a session in it, not a working
+agent. A pane/process COUNT alone is not evidence of recovery.
+
+**The epic has decided, and this story implements it: wyzr DETECTS AND
+REPORTS this and does NOT fix it.** Fixing it would mean a SECOND spawner
+racing the daemon's own reconcile poll; the defect belongs to the component
+that does the restoring, and papering over it removes the pressure to fix it
+at the source; and wyzr runs on the manager box, so fixing it would mean
+reaching into the rescued box's userspace — the exact coupling this product
+exists to avoid. **The repair is filed outside this epic, as WYZR-21.** This
+command is a smoke detector, not a repair.
+
+**The enumeration trap this check's design exists to avoid**, relayed on the
+ticket from a real run against a live multi-agent box, 2026-09-10: a
+bare-restored pane's argv carries NONE of the expected spawn flags at all
+(the workspace path — where the ticket key would appear — lives INSIDE one
+of the missing flags). So the obvious implementation — enumerate panes by
+matching something only a HEALTHY pane has, then check flags within that set
+— has a denominator that structurally excludes exactly the panes it exists
+to catch, and would report "N of N healthy" forever on a fleet that is half
+bare. **`src/recovery-probes.ts`'s `FleetAuditConfig`/`classifyFleetProcesses()`
+build the candidate set from `processMatch` — something every candidate,
+bare or not, still has (the binary name) — and apply `expectedFlags` only
+AFTER that set exists, never as part of building it.** The denominator
+(`totalCandidates`) is always reported alongside `bareCount` — "0 bare
+panes found" is only meaningful next to a denominator that could have
+contained one.
+
+### The fleet-audit redaction boundary
+
+**The redaction registry matches whole registered strings and cannot protect
+against a value that was never registered — a session id is exactly such a
+value.** So `src/recovery-probes-real.ts`'s `checkFleetAudit()` reads the
+raw process-list text ONLY inside that one method, hands it ONLY to the pure
+`classifyFleetProcesses()` classifier, and that classifier returns COUNTS
+ONLY — `src/recovery-probes.ts`'s `RawFleetAuditReading` has no field a raw
+argv string, pid, or session id could ever occupy, on ANY path, including
+every error path (a nonzero ssh exit or a timeout never touches the raw
+stdout at all). `test/unit/recovery-probes-real.test.ts` feeds the
+classifier a fixture whose raw text contains a session-id-shaped string and
+asserts that string appears nowhere in the returned object, at both the
+pure-classifier level and the probe level (including the error path).
+
+### The daemon check's four raw outcomes, and why pointed-at-nothing is not a fail
+
+`healthy` / `unhealthy` / `pointed-at-nothing` / a genuine probe failure —
+four states, not three, because "the unit does not exist under this scope"
+(what a WRONG SCOPE looks like) must never read as "found and not running."
+For the top-level verdict, `pointed-at-nothing` rolls up to `COULD-NOT-LOOK`
+rather than `FAIL`: we looked, in the wrong place, so we genuinely do not
+know whether the daemon is healthy — a claim of "unhealthy" here would be
+exactly the kind of false claim about our own knowledge this whole command
+exists to avoid.
+
+### The local-connectivity gate on silence
+
+**A broken local connection can SUPPRESS a reply, but it cannot MANUFACTURE
+one** (the same asymmetry `wyzr wedge status` settled, applied here in the
+opposite direction). ssh RETURNING is this command's strong signal — decisive
+on its own, no control needed. But **"the box did not come back" resting
+ONLY on silence is confounded the same way, in the other direction**:
+reporting "it never came back" when it is the MANAGER's own internet that
+died is the same false claim wearing the opposite hat. So the reachability
+check's `FAIL` (every configured direct path silent) is gated on the
+local-connectivity control (`src/wedge-probes.ts`'s `checkLocalConnectivity`,
+reused verbatim) having been read and reporting healthy; if the control is
+unhealthy, errored, timed out, or unconfigured, that silence is
+`COULD-NOT-LOOK` instead. **An affirmative failure elsewhere is never
+downgraded by this gate** — the reboot check's "never rebooted" reading, for
+instance, can only be reached at all once ssh has already answered, so it is
+unconfounded by construction and stays `FAIL` (and the overall verdict stays
+`NOT_RECOVERED`) whatever the local-connectivity control did.
+
+### The verdicts and their precedence
+
+Five verdict classes, a distinct exit code per class (see the exit-code
+table above), so a later `wyzr cycle` can tell them apart without parsing
+prose:
+
+- **RECOVERED** (exit `0`) — every configured check affirmatively PASSED,
+  and nothing was unconfigured or unreadable.
+- **NOT_RECOVERED** (exit `13`) — the box affirmatively did not come back,
+  affirmatively did not reboot, or some other check affirmatively failed.
+- **FLEET_HALF_RESTORED** (exit `14`) — the box itself is affirmatively back
+  and rebooted (reachability AND reboot both `PASS`), but the fleet came
+  back with bare agent processes present, and no OTHER check (daemon,
+  instruments) also affirmatively failed. Its own verdict and its own code —
+  distinguishable from both RECOVERED and "the box didn't come back at
+  all," because its remedy differs from either.
+- **INCONCLUSIVE** (exit `15`) — something load-bearing was LOOKED AT and
+  could not be read, and nothing affirmatively failed.
+- **UNCONFIGURED** (exit `16`) — nothing failed and nothing was unreadable;
+  the only gaps are checks nobody was ever told where to point.
+
+**Why the last two are separate — a ruling from the epic, carried over from
+`wyzr wedge status`'s own second bounce, and not this task's to soften.**
+"You never told me where to look" is an operator-fixable setup gap; "I
+looked and could not see" is possible evidence about the box. Different
+epistemic states. **What makes it urgent rather than tidy: UNCONFIGURED is
+the NORMAL state until WYZR-20 ships.** Collapsing the two means EVERY run
+returns the same verdict, forever, until a story that has not started yet
+lands — and a verdict that never varies teaches an operator to stop reading
+it, so the one meaning "the box is gone" would arrive looking identical to
+the two hundred meaning "you have not written a config file."
+
+**Precedence, in this exact order, each with the reasoning that justifies
+it** (`src/recovery.ts`'s `evaluateRecovery()` own comment states the same
+thing next to the code):
+
+1. **FLEET_HALF_RESTORED** — ONLY when the box itself is confirmed back
+   (reachability AND reboot both `PASS` — never report half-restored about a
+   box with no evidence it returned) AND the fleet check's failure is
+   specifically the bare-panes shape AND no OTHER check (daemon,
+   instruments) also affirmatively failed — **a failure of the box itself
+   outranks the fleet's shape.**
+2. **NOT_RECOVERED** whenever any check affirmatively failed and rule 1 did
+   not already apply — **an affirmative failure outranks an absence**; "I
+   could not look at X" is never a reason to withhold a verdict already
+   affirmatively established.
+3. **INCONCLUSIVE** when nothing failed but at least one check could not be
+   read — **a could-not-look outranks an unconfigured gap.**
+4. **UNCONFIGURED** when nothing failed and nothing was unreadable.
+5. **RECOVERED** only when every check affirmatively passed.
+
+Neither `COULD-NOT-LOOK` nor `NOT-CONFIGURED` is EVER upgraded to a pass or
+downgraded to a fail — only an actual per-check `FAIL` can reach rule 2, and
+only `PASS` across every check reaches rule 5. **No check's pass is ever
+inferred from another's** — an unreachable box is never "rebooted
+successfully" on the strength of another check passing, because every check
+above reads only its OWN raw observation.
+
+### Structurally read-only, and no import path to the plug at all
+
+`src/cli-recovery.ts` imports nothing from `src/cli-plug.ts`, `src/plug.ts`,
+`src/auth-session.ts`, or any transport module — same property `wyzr wedge
+status` already has, stated the same way (checkable by reading its own
+imports, not a runtime flag someone could flip). **This story ships the real
+test the ticket demands, which the wedge trio's own README section only
+ever asserted in prose:** `test/unit/recovery-imports.test.ts` walks
+`src/cli-recovery.ts`'s TRANSITIVE import closure and asserts none of
+`plug.ts`/`cli-plug.ts`/`auth-session.ts`/`transport.ts`/`transport-http.ts`/
+`transport-fake.ts` is reachable from it at all, plus a sanity floor
+asserting the walk actually reached a meaningful number of this command's
+own real dependencies first (so an empty/broken walk cannot pass this test
+for the wrong reason — the same "assert the expected sample size before a
+negative result means anything" rule this ticket applies elsewhere,
+applied here to a structural check instead of a statistical sample).
+
+**Watched RED first, per the ticket's explicit instruction:** a temporary
+`import "./plug.ts";` was added to the top of `src/cli-recovery.ts`, this
+test was run and OBSERVED TO FAIL — `error: .../src/plug.ts IS reachable
+from src/cli-recovery.ts, via: .../src/cli-recovery.ts ->
+.../src/plug.ts` — then the import was removed and the test re-run and
+observed to pass. See the PR description for the full transcript.
+
+### The probe composition: `WedgeProbes` reused verbatim, never widened
+
+**`src/wedge-probes.ts`'s `WedgeProbes` is a published interface WYZR-19
+depends on, and this story does NOT widen it** — adding methods would force
+every existing implementation and fake to change for a consumer that is not
+WYZR-19. `src/recovery-runner.ts`'s `runRecoveryCheck()` takes BOTH a
+`WedgeProbes` (reused verbatim for `checkSsh`, `checkTunnelPing`,
+`checkJiraActivity`, `checkGitHubActivity`, and `checkLocalConnectivity` —
+**not** `checkControlPlane`, which this story has no use for) AND a new,
+separate `RecoveryProbes` (`src/recovery-probes.ts` — the three genuinely
+new probes: uptime, daemon, fleet-audit). Composition over widening.
+
+### Config reuse, and the one host var this story does NOT introduce
+
+`src/recovery-config.ts`'s `loadRecoveryConfigFromEnv()` does not re-declare
+env vars for anything WYZR-16 already owns: the SAME `WYZR_WEDGE_*` env vars
+(`WYZR_WEDGE_JIRA_*`, `WYZR_WEDGE_GITHUB_*`, `WYZR_WEDGE_SSH_HOST`,
+`WYZR_WEDGE_TUNNEL_PING_HOST`, `WYZR_WEDGE_LOCAL_CONNECTIVITY_TARGET`)
+configure both `wyzr wedge status` and `wyzr recovery status`, because both
+probe the same suspect box from the same manager-box vantage point.
+
+**Design decision this ticket left open, resolved here: the three new
+probes do NOT get their own `--host`.** They reuse `WYZR_WEDGE_SSH_HOST` as
+their target — the same suspect box WYZR-16's ssh direct path already
+points at. A second host var would let an operator misconfigure the two to
+point at different boxes with no error, and there is no legitimate reason
+for them to differ. Consequence: if `WYZR_WEDGE_SSH_HOST` is unset, the
+uptime/daemon/fleet probes are unconfigured too, regardless of their own
+env vars.
+
+| Env var | Configures |
+| --- | --- |
+| `WYZR_WEDGE_JIRA_*`, `WYZR_WEDGE_GITHUB_*` | Outside-instrument resumption (check 4) — same vars as `wyzr wedge status`. |
+| `WYZR_WEDGE_SSH_HOST` | Reachability's ssh path (check 1) AND, by reuse, the target host for the reboot/daemon/fleet probes (checks 2/3/5). |
+| `WYZR_WEDGE_TUNNEL_PING_HOST` | Reachability's tunnel-ping path (check 1). |
+| `WYZR_WEDGE_LOCAL_CONNECTIVITY_TARGET` | The shared-cause exclusion's target — same default (`1.1.1.1`) as `wyzr wedge status`. |
+| `WYZR_RECOVERY_UPTIME_TIMEOUT_MS` | Overrides the uptime probe's timeout — defaults to the reused ssh config's own `timeoutMs`. |
+| `WYZR_RECOVERY_DAEMON_UNIT` + `WYZR_RECOVERY_DAEMON_SCOPE` (`"user"` or `"system"`, both required together) | The daemon check (check 3). `WYZR_RECOVERY_DAEMON_TIMEOUT_MS` overrides its timeout. |
+| `WYZR_RECOVERY_FLEET_PROCESS_MATCH` + `WYZR_RECOVERY_FLEET_EXPECTED_FLAGS` (comma-separated, both required together) | The fleet-pane audit (check 5). `WYZR_RECOVERY_FLEET_TIMEOUT_MS` overrides its timeout. |
+
+Every field above defaults to **unconfigured** unless the operator supplies
+it — never a guess, same discipline as `wyzr wedge status`, and for the same
+reason: this is the NORMAL state until WYZR-20 ships.
+
+### The `--json` contract
+
+`RECOVERY_SCHEMA_VERSION` (`src/cli-recovery.ts`), starting at `1`,
+following this repo's established per-command schema-version precedent —
+additive-only.
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "recovery status",
+  "verdict": "UNCONFIGURED",
+  "since": "2026-09-11T10:20:00.000Z",
+  "elapsedMs": 100000,
+  "checks": {
+    "reachability": "not-configured",
+    "reboot": "not-configured",
+    "daemon": "not-configured",
+    "instruments": "not-configured",
+    "fleet": "not-configured"
+  },
+  "reasons": ["..."],
+  "reachability": [{ "name": "ssh", "outcome": "not-configured", "note": "not configured — no operator-supplied host for this direct path" }],
+  "localControl": { "name": "local-connectivity", "outcome": "healthy", "confirms": ["manager-internet"], "note": null },
+  "uptime": { "outcome": "not-configured", "uptimeMs": null, "note": "not configured — no ssh host to read uptime from" },
+  "daemon": { "outcome": "not-configured", "unit": null, "scope": null, "note": "not configured — no unit/scope supplied" },
+  "instruments": [{ "name": "jira-activity", "outcome": "not-configured", "lastSeenAt": null, "note": "not configured — no operator-supplied target for this instrument" }],
+  "fleet": { "outcome": "not-configured", "totalCandidates": null, "flaggedCount": null, "bareCount": null, "note": "not configured — no process-match/expected-flags supplied" }
+}
+```
+
+Real output, not a hand-typed example — `reachability`/`instruments` are
+each shown with ONE entry for brevity (both arrays have two: ssh/tunnel-ping
+and jira-activity/github-activity respectively, identically shaped). It was
+produced by running `evaluateRecovery()`/`toRecoveryStatusJson()` directly
+against the same "everything unconfigured" inputs
+`test/unit/cli-recovery.test.ts`'s corresponding case constructs — captured
+2026-09-11, not asserted from memory.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `verdict` | `"RECOVERED"` \| `"NOT_RECOVERED"` \| `"FLEET_HALF_RESTORED"` \| `"INCONCLUSIVE"` \| `"UNCONFIGURED"` | See "The verdicts and their precedence" above. |
+| `checks.*` | `"pass"` \| `"fail"` \| `"could-not-look"` \| `"not-configured"` | Each of the five checks' own outcome — lets a caller reason about WHICH check drove the verdict, not just the verdict itself. |
+| `reachability[].outcome` | `"alive"` \| `"dead"` \| `"unconfirmed"` \| `"not-configured"` | Per direct path (ssh, tunnel-ping) — see "Direct paths" in `wyzr wedge status`'s own section for what these mean at the raw-probe level. |
+| `daemon.unit` / `daemon.scope` | `string \| null` | Which unit and scope were actually examined, so a reader can tell what this check looked at — never omitted when configured. |
+| `fleet.totalCandidates` / `.flaggedCount` / `.bareCount` | `number \| null` | COUNTS ONLY — see "The fleet-audit redaction boundary" above. Always reported together. |
+| `note` (every sub-object) | `string \| null` | Fragment-safe — never any part of a raw response value, a credential, a pid, a session id, or a raw command line, on any path (same rule as `wyzr wedge status`'s own contract). |
+
+This is allowlist-projected by `src/cli-recovery.ts` from this module's
+internal `RecoveryResult` shapes — never a raw spread of them, which carry
+an internal `__brand` discriminant on every observation that has no
+business in a published API.
+
+### Tests
+
+Every named test the ticket requires exists in `test/unit/recovery.test.ts`
+(the pure-engine cases: the reboot check's skew-safety in both directions, a
+flickered-plug-without-restart failure, the plug-liveness type exclusion and
+its behavioral counterpart, FLEET_HALF_RESTORED as its own reachable
+verdict, the daemon check's four-way distinction, no check's pass inferred
+from another's, the instrument-resumption trap, the local-connectivity gate
+on silence in both directions, RECOVERED's unreachability under any
+unconfigured/unreadable check, and the UNCONFIGURED-vs-INCONCLUSIVE
+distinction — each named for what it pins, per the ticket's own requirement),
+`test/unit/recovery-probes-real.test.ts` (the pure classifiers —
+`parseUptimeSeconds`, `classifyDaemonOutput`, `classifyFleetProcesses`,
+including the session-id-shaped-string redaction test at both the classifier
+and the probe level, on the success AND the error path), and
+`test/unit/recovery-imports.test.ts` (the structural read-only proof, watched
+RED first — see above).
+
+`src/recovery.ts` calls no ambient time source anywhere — same discipline as
+`src/wedge.ts`. `RecoveryInput.now`/`.since` are the only time this module
+ever sees, injected by its caller; real per-probe timeouts live in
+`src/recovery-runner.ts`'s I/O layer, never in the engine.
+
+### What has never been run against reality
+
+**Nothing in this section has ever faced a real recovering box.** All three
+new probes (`checkUptime`, `checkDaemon`, `checkFleetAudit`) are, like
+everything device-facing in this repo, exercised only against
+`FakeWedgeProbes`/`FakeRecoveryProbes` in this suite and against harmless
+local fixtures at the classifier level — never against an actually-wedged
+remote machine, a real systemd unit over ssh, or a real fleet pane.
+Specifically:
+
+- **`/proc/uptime`'s shape** (a space-separated pair of floats, first field
+  seconds since boot) is this project's own knowledge of the Linux kernel's
+  documented `/proc` interface — never captured from this specific product's
+  own suspect box, because this repo names no such host.
+- **`systemctl show ... --property=LoadState,ActiveState`'s output shape**
+  (`Key=Value` lines) is systemd's own documented behavior — never captured
+  from a real run against a real unit on a real box.
+- **The fleet-pane-audit's `ps -eo args=` shape**, and the entire
+  enumeration-trap reasoning it is built on, is RELAYED from a real run
+  against a real multi-agent box on 2026-09-10 (see "The herdr-restore trap"
+  above) — real, but relayed, not independently re-measured by this repo's
+  own authors, and the relayed run itself could not confirm how long a bare
+  pane persists before exiting (see the ticket's own honesty limits on that
+  measurement).
+- **The reboot check's skew-safety property** is proven mathematically
+  (a pure duration comparison, verified by unit tests covering both skew
+  directions) but has never been checked against a real box whose clock is
+  actually wrong.
+
+A green suite here proves this code matches this project's own belief about
+`/proc/uptime`, `systemctl show`, and `ps`'s output shapes; it **cannot**
+prove those beliefs are correct on every Linux distribution/systemd version
+an operator might run. Like `wyzr wedge status` before it, this command
+cannot be exercised against reality by any agent in this fleet — see the
+epic's own "no agent can ever run this product" ruling.
 
 ## Development
 

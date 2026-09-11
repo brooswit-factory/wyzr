@@ -37,6 +37,35 @@ export const ExitCode = {
    * WedgeNotProven, so a script can tell "not wedged" from "could not
    * look" without parsing prose. */
   WedgeInconclusiveBySharedCause: 12,
+  /** `wyzr recovery status` (WYZR-25): the verdict was NOT_RECOVERED — the
+   * box affirmatively did not come back, affirmatively did not reboot, or
+   * some other check affirmatively failed. An OUTCOME code, same class as
+   * 9/10/11/12: the command succeeded at running every probe and is
+   * reporting exactly what it observed. See src/recovery.ts. */
+  RecoveryNotRecovered: 13,
+  /** `wyzr recovery status` only: the box itself is affirmatively back and
+   * rebooted, but the fleet came back with bare (un-flagged) agent
+   * processes present — the herdr-restore trap. Distinguishable from BOTH
+   * RecoveryNotRecovered and success (0) on its own code so a script never
+   * has to parse prose to tell "the box didn't come back" from "the box is
+   * fine but the fleet needs a manual nudge." wyzr detects and reports
+   * this; it does not fix it (WYZR-21 owns the fix). */
+  RecoveryFleetHalfRestored: 14,
+  /** `wyzr recovery status` only: something load-bearing was LOOKED AT and
+   * could not be read, and nothing affirmatively failed — "I looked and
+   * could not see," possible evidence about the box. Deliberately its OWN
+   * code, distinct from RecoveryUnconfigured below: collapsing the two
+   * would mean EVERY run returns the same verdict until WYZR-20 ships
+   * (unconfigured is the normal state until then), teaching an operator to
+   * stop reading it. See src/recovery.ts's evaluateRecovery() precedence
+   * comment. */
+  RecoveryInconclusive: 15,
+  /** `wyzr recovery status` only: nothing failed and nothing was
+   * unreadable — the only gaps are checks nobody ever pointed anywhere.
+   * "You never told me where to look" is an operator-fixable setup gap,
+   * never possible evidence about the box — see RecoveryInconclusive's own
+   * comment for why this must never collapse into it. */
+  RecoveryUnconfigured: 16,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -59,6 +88,10 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.WriteContradicted]: "write_contradicted",
   [ExitCode.WedgeNotProven]: "wedge_not_proven",
   [ExitCode.WedgeInconclusiveBySharedCause]: "wedge_inconclusive_by_shared_cause",
+  [ExitCode.RecoveryNotRecovered]: "recovery_not_recovered",
+  [ExitCode.RecoveryFleetHalfRestored]: "recovery_fleet_half_restored",
+  [ExitCode.RecoveryInconclusive]: "recovery_inconclusive",
+  [ExitCode.RecoveryUnconfigured]: "recovery_unconfigured",
 };
 
 export class CliError extends Error {

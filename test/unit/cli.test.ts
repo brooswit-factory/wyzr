@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { defaultDevicesDispatchDeps, defaultPlugDispatchDeps, dispatchDevices, dispatchPlug, parseArgs, run } from "../../src/cli.ts";
+import {
+  defaultDevicesDispatchDeps,
+  defaultPlugDispatchDeps,
+  dispatchDevices,
+  dispatchPlug,
+  dispatchRecovery,
+  parseArgs,
+  run,
+} from "../../src/cli.ts";
 import type { Credentials } from "../../src/credentials.ts";
 import { CliError, ExitCode } from "../../src/errors.ts";
 import { REDACTED, registerSecret, resetSecretsForTesting } from "../../src/redact.ts";
@@ -378,5 +386,58 @@ describe("run — the try/catch exit-code boundary", () => {
 
     expect(printed).not.toContain(token);
     expect(printed).toContain(REDACTED);
+  });
+});
+
+describe("run — recovery command routing (subcommand + --since validation only; the real wiring is src/cli-recovery.ts's own tests, against fake probes)", () => {
+  test("`recovery` with no subcommand is a Usage error naming --since, not a network attempt", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["recovery"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy).toHaveBeenCalledWith("Usage: wyzr recovery status --since <ISO-8601 timestamp> [--json]");
+    errSpy.mockRestore();
+  });
+
+  test("`recovery frobnicate` (an unknown subcommand) is a Usage error naming it", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["recovery", "frobnicate"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy).toHaveBeenCalledWith("Unknown recovery subcommand: frobnicate");
+    errSpy.mockRestore();
+  });
+
+  test("`recovery status` with no --since at all is a Usage error — no default, ever", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["recovery", "status"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(String(errSpy.mock.calls[0]![0])).toContain("--since is required");
+    errSpy.mockRestore();
+  });
+
+  test("`recovery status --since` with no value is a Usage error", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["recovery", "status", "--since"]);
+    expect(code).toBe(ExitCode.Usage);
+    errSpy.mockRestore();
+  });
+
+  test("an unparseable --since value is a Usage error naming what was given", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["recovery", "status", "--since", "not-a-timestamp"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(String(errSpy.mock.calls[0]![0])).toContain('"not-a-timestamp"');
+    errSpy.mockRestore();
+  });
+
+  test("a future-dated --since is a Usage error, never silently accepted", async () => {
+    // dispatchRecovery() throws a CliError directly (src/cli.ts's own error
+    // boundary is in run(), not here) — same shape as dispatchWedge()'s own
+    // subcommand-validation throws, so this asserts the rejection directly
+    // rather than a returned code.
+    const now = 1_800_000_000_000;
+    const future = new Date(now + 60_000).toISOString();
+    await expect(dispatchRecovery(["status", "--since", future], false, undefined, now)).rejects.toThrow(
+      /is in the future/,
+    );
   });
 });
