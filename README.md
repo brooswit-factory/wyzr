@@ -57,6 +57,11 @@ Commands:
   wedge status            Report the wedge-proof engine's full evidence trail and verdict (read-only).
   recovery status --since <ISO-8601 timestamp>
                           Report post-cycle recovery evidence and verdict (read-only).
+  cycle <device> [--dry-run]
+                          Gated power cycle: off, wait, never-give-up on, then a recovery
+                          verdict. DESTRUCTIVE. --dry-run is the only way to exercise this
+                          verb's judgment without cutting power. See README's "wyzr cycle"
+                          section before ever running this for real.
 ```
 
 `--json` switches success output to machine-readable JSON on stdout and
@@ -91,11 +96,23 @@ stories — the numbers already assigned here never change or get reused.
 | 14   | `recovery_fleet_half_restored` | `wyzr recovery status` only: the box itself is affirmatively back and rebooted, but the fleet came back with bare (un-flagged) agent processes present — the herdr-restore trap. wyzr detects and reports this; it does not fix it. |
 | 15   | `recovery_inconclusive` | `wyzr recovery status` only: something load-bearing was looked at and could not be read, and nothing affirmatively failed — possible evidence about the box. Distinct from 16 so a script can tell "could not look" from "never configured." |
 | 16   | `recovery_unconfigured` | `wyzr recovery status` only: nothing failed and nothing was unreadable — the only gaps are checks nobody ever pointed anywhere. This is the NORMAL state until WYZR-20 ships. |
+| 17   | `cycle_refused_by_gate` | `wyzr cycle` only: the wedge gate's verdict was NOT_PROVEN or INCONCLUSIVE_BY_SHARED_CAUSE and nothing overrode it. Produced whether or not `--dry-run` was passed — see "`wyzr cycle`" below. |
+| 18   | `cycle_refused_by_wrong_box_guard` | `wyzr cycle` only: the wrong-box guard refused — either it affirmatively established this machine IS the configured target, or it could not affirmatively establish that it is not. Runs on every path, including `--force` and `--dry-run` — no escape hatch. |
+| 19   | `cycle_refused_by_precondition` | `wyzr cycle` only: refused by the before-the-cut precondition (cloud unreachable, or the plug's P3/P5 not both readable) — the CAPABILITY `--force` can never override. |
+| 20   | `cycle_dry_run_would_act` | `wyzr cycle --dry-run` only: every check cleared — a live run at this moment would have proceeded to cut power. Lets a script tell "dry run: would act" apart from a dry-run refusal (17/18/19). |
+| 21   | `cycle_stranded` | `wyzr cycle` only, and the loudest code in this product: the OFF was attempted, the never-give-up ON restore ran to its bound, and the plug's own read-back never confirmed "on". NEVER reported as success. |
+| 22   | `cycle_not_recovered` | `wyzr cycle` only: the plug confirmed the restore, but the composed recovery verdict was NOT_RECOVERED. |
+| 23   | `cycle_fleet_half_restored` | `wyzr cycle` only: the composed recovery verdict was FLEET_HALF_RESTORED. Its own code rather than reusing 14 — see "`wyzr cycle`" below for why. |
+| 24   | `cycle_recovery_inconclusive` | `wyzr cycle` only: the composed recovery verdict was INCONCLUSIVE. |
+| 25   | `cycle_recovery_unconfigured` | `wyzr cycle` only: the composed recovery verdict was UNCONFIGURED. |
 
 Codes 8/9/10 were added by `wyzr plug status|on|off` (WYZR-13); 11/12 were
 added by `wyzr wedge status` (WYZR-17); 13/14/15/16 were added by `wyzr
-recovery status` (WYZR-25) — all appending only, never renumbering or
-reusing an existing code. 0–7 are unchanged from earlier stories.
+recovery status` (WYZR-25); 17-25 were added by `wyzr cycle` (WYZR-19/
+WYZR-27) — all appending only, never renumbering or reusing an existing
+code. 0–7 are unchanged from earlier stories. `wyzr cycle`'s own success
+(cycled and recovered) reuses exit `0`, by symmetry with `recovery
+status`'s RECOVERED.
 
 ### Two classes of non-zero exit code
 
@@ -134,6 +151,21 @@ UNCONFIGURED are the command *working*, not failing. It prints its normal,
 documented evidence-trail payload (see "`wyzr recovery status`" below) to
 stdout and returns the code; `--json` mode never wraps any of these in the
 `{"error": {...}}` shape either.
+
+**Codes `17`-`25` are OUTCOME codes too, on the same reasoning — with one
+exception.** A refusal (`17`/`18`/`19`), a would-act dry run (`20`), a
+composed recovery outcome (`22`/`23`/`24`/`25`), and a stranded restore
+(`21`) are ALL the command *working*, not failing — it evaluated the gate,
+the wrong-box guard, and the preconditions (and, on a live run that
+proceeded, performed the OFF/wait/ON sequence and the recovery check) and
+is reporting exactly what happened. All of these print the normal,
+documented evidence-trail payload (see "`wyzr cycle`" below) to stdout,
+never the `{"error": {...}}` shape. **The one genuine usage error this verb
+adds — `--force` without a satisfied confirmation, or `--force` with no
+configured wrong-box target — is an ordinary Usage error (`2`)**, not a new
+outcome code: it is "you invoked the CLI wrong," the same class as a
+missing `<device>` argument, not a claim about the gate, the box, or the
+plug.
 
 **Neither `9` nor `10` is a claim that a write did nothing.** `9` on the
 write path means the write was accepted by Wyze AND its resulting state
@@ -2162,6 +2194,497 @@ prove those beliefs are correct on every Linux distribution/systemd version
 an operator might run. Like `wyzr wedge status` before it, this command
 cannot be exercised against reality by any agent in this fleet — see the
 epic's own "no agent can ever run this product" ruling.
+
+## `wyzr cycle`
+
+The destructive verb (WYZR-19/WYZR-27): cuts MAINS POWER to the physical
+box the whole agent fleet runs on, waits, and restores it. **There is no
+graceful drain, no confirmation from the far side, and no undo.** Everything
+above this section in the README is read-only; this one command is not.
+
+```sh
+wyzr cycle <device>              # gated, live — refuses unless the gate is PROVEN
+wyzr cycle <device> --dry-run    # the ONLY way to exercise this verb's judgment
+                                  # without cutting power — see "Dry-run" below
+wyzr cycle <device> --force-override-gate-verdict-i-accept-the-risk \
+  --force-non-interactive-confirm-target=<configured-target-host>
+                                  # human-forced, non-interactive — see "Force" below
+```
+
+`<device>` is resolved the same way, through the same code
+(`src/device-resolve.ts`), as `plug status|on|off` — exact mac or exact name,
+case-insensitive, never a guess between ambiguous matches. This verb does
+not assume one device equals one switchable outlet either; nothing here
+invents a second resolution path.
+
+### The sequence, and why it is a procedure, not a single verdict function
+
+`src/wedge.ts`'s `evaluateWedge()` and `src/recovery.ts`'s
+`evaluateRecovery()` are each a single pure function: gather everything,
+decide once. `wyzr cycle` is not that shape — it is a PROCEDURE with real
+actions gated at specific points, so `src/cycle-runner.ts` follows
+`src/wedge.ts`/`src/wedge-runner.ts`'s injectable-boundary discipline
+(gate, plug transport, recovery verifier, and clock all injected; every
+path exercisable at zero network, zero credentials, zero real writes)
+without forcing the whole thing into one `evaluate(input)` call. Two pieces
+ARE extracted as genuinely pure: `src/cycle.ts`'s `decideGate()` (switches
+on the gate's verdict VALUE, never reconstructs one from text) and
+`src/cycle-wrong-box.ts`'s own pure-engine/impure-runner pair,
+`evaluateWrongBoxGuard()`/`runWrongBoxGuard()` (the guard resolves real
+network-address evidence through its own injectable
+`WrongBoxIdentityProbe` boundary — see "The wrong-box guard" below for why
+a hostname-string comparison alone can never be made to work here).
+
+The sequence, every step recorded as its own evidence-trail entry (never
+collapsed into a boolean — the same "evidence is the product, the verdict
+is a summary of it" discipline as `WedgeResult.reasons`/
+`RecoveryResult.reasons`):
+
+1. **Evaluate the gate** — `src/wedge-runner.ts`'s `runWedgeCheck()`,
+   COMPOSED, never reimplemented or re-derived. `wyzr cycle` switches on the
+   verdict VALUE only.
+2. **Wrong-box guard** — see below. Runs unconditionally, on every path.
+3. **Cloud + plug-state preconditions** — see below. Also runs
+   unconditionally, regardless of what the gate or the guard already
+   decided.
+4. **OFF** (only if every check above cleared, or the gate's own refusal was
+   overridden by a satisfied force) — see "The D1 asymmetry" below.
+5. **Wait** — a configured pause before the restore begins.
+6. **ON, the never-give-up restore** — see below.
+7. **Recovery verdict** — `src/recovery-runner.ts`'s `runRecoveryCheck()`,
+   COMPOSED, never reimplemented, `since` set to the OFF instant captured
+   from the injected clock at the moment OFF was attempted (a wedged box
+   cannot be read BEFORE the cut, so the cut instant is the only baseline
+   that always exists — same reasoning `recovery status --since` documents).
+8. **Report** — human or `--json`, one evidence trail, one verdict.
+
+All three preamble checks (gate, wrong-box guard, preconditions) are
+evaluated on EVERY run, dry or live, never short-circuited — this is what
+lets a refused dry run show the FULL picture (R5's own bar: "someone must
+be able to watch the gate decide NO on a healthy box and see exactly why"),
+and what makes `wyzr cycle --force ...` still refuse when the cloud is
+unreachable even though force would otherwise have overridden the gate's
+own NOT_PROVEN verdict (the single most important test in this story — see
+"Force" below). **When more than one preamble check would refuse, the
+REPORTED outcome follows this priority: wrong-box guard, then
+preconditions, then the gate.** Deliberate, not arbitrary: the wrong-box
+guard gets "no escape hatch, anywhere, under any flag" (stronger language
+than the preconditions get), and the preconditions are a CAPABILITY force
+can never touch, while the gate's own refusal is the one thing force CAN
+override — reporting weakest-to-strongest (gate last) means the outcome you
+see is always the strongest reason the run could not proceed, never a
+weaker one masking a stronger one force could not have fixed anyway.
+
+### The D1 asymmetry — refuse before the cut, never give up after it
+
+**Before the OFF:** cloud reachability and a readable plug state are an
+affirmative PRECONDITION, checked IMMEDIATELY BEFORE acting
+(`src/cycle-preconditions.ts`'s `evaluatePreconditions()`). One
+`PlugReader.readState()` call decodes both halves at once: reaching a
+decodable `get_property_list` response requires having reached Wyze's
+cloud API at all (login and the device-host call both succeeded), and both
+P3 and P5 decoding is `src/plug.ts`'s own "state known" rule, reused rather
+than re-derived. If the cloud cannot be reached, or the plug's state cannot
+be read, `cycle` REFUSES and cuts nothing — **the power-off is the point of
+no return, and an operator who cannot turn the plug back ON must never be
+allowed to turn it off.**
+
+**After the OFF, the box is already dark and refusing helps nobody.** The ON
+is retried — bounded, with a real timeout, explicit, loud, never silent
+(`src/cycle-runner.ts`'s `performRestoreNeverGiveUp()`), entirely behind the
+injected `CycleClock` (`src/cycle-clock.ts`) — **no real-timer sleep
+anywhere in this repo's suite**, and no default clock anywhere in
+`src/cycle-runner.ts` (an omitted `clock` is a compile error, not a
+fallback to a real timer). If the restore cannot be confirmed within the
+configured bound, `wyzr cycle` exits on its own distinct code (`21`,
+`cycle_stranded`) whose message states plainly: power is OFF, the restore
+was NOT confirmed, and the exact single command that restores it by hand
+(from `WYZR_CYCLE_HAND_RESTORE_COMMAND` — configured, never invented). This
+is the loudest thing in the product, and it is NEVER reported as success.
+
+**Why the OFF write is at most once, ever, while the ON may be retried
+(R1) — two reasons, and the second is the important one.** (i) A
+contradicted or unreadable OFF read-back is equally consistent with a write
+that WORKED, so a second blind OFF would act on a plug that may already
+have switched — redundant. (ii) **Far worse than redundant: if the plug DID
+switch and the box has begun to boot, a second OFF cuts power to a machine
+MID-BOOT** — an unclean power loss during startup, on the box carrying the
+whole fleet. So the OFF/ON asymmetry is not "one is redundant and one is
+necessary"; it is that a retried OFF has a failure mode the FIRST OFF does
+not have at all. `src/cycle-runner.ts`'s `performOff()` carries this same
+reasoning in its own comment, on purpose — a future reader must be able to
+re-derive why, not take the asymmetry on faith. A THROWN `set_property`
+call is treated the same way: a thrown write cannot be distinguished from
+one that LANDED at Wyze with a lost response, so "the write failed, so
+nothing happened, so I can exit" is never a safe conclusion — the restore
+always runs next regardless of how the OFF's own write or read-back
+resolved (R2). `src/plug.ts`'s existing `classifyWriteOutcome()` (the
+`confirmed`/`unconfirmed`/`contradicted` three-way split from `plug on/off`)
+is reused verbatim for both the OFF's and every ON attempt's own read-back
+classification — nothing here re-derives it.
+
+**Every read-back — OFF's and each ON attempt's — is a BOUNDED RETRY before
+any conclusion (R3), driven by the injected clock.** Propagation was
+measured exactly once, n=1, about three seconds, one plug, one network, by
+hand — **that is not a latency budget**, and no sleep anywhere in this verb
+is tuned to it; the poll interval and the bound are both plain, configured,
+round-number defaults (see "Configuration" below), documented as exactly
+that.
+
+### The wrong-box guard (D7) — four rounds to get right, and why
+
+`cycle` must REFUSE when the machine it runs on is the machine it is about
+to cut. **There is no "run it from the fleet box" escape hatch, anywhere,
+under any flag** — `src/cycle-wrong-box.ts`'s `runWrongBoxGuard()` runs
+unconditionally, before this verb ever acts on the gate's verdict or the
+preconditions, on every path including `--force` and `--dry-run` (dry-run
+REPORTS its finding rather than skipping the check).
+
+**This guard went through four rounds before it was right, and the history
+is worth keeping — it is a small, self-contained instance of exactly what
+this epic exists to catch.**
+
+- **Round 1** compared a configured hostname string to the local hostname,
+  normalised (trim, lowercase) and special-cased an FQDN against its own
+  short form as a match. Review caught, by MEASUREMENT before inspection,
+  that documenting this as "every unresolvable case refuses" was FALSE: a
+  DNS-alias/CNAME divergence and a container/VM hostname divergence both
+  produced `"not_target"` (PROCEED). The epic overturned the proposed
+  doc-only fix: **the code was wrong, not the docs** — a guard that fails
+  open on the exact case D7 exists to prevent is not fixed by describing
+  the hole accurately.
+- **Round 2** tried a cleverer string rule: compare only when both
+  identities are the same "kind" (a plain hostname, an FQDN sharing a
+  domain, an IP literal, a container-shaped hex id), refuse on every
+  cross-kind pairing. **Also wrong, caught the same way — by running it
+  against the epic's own worked example, not by inspecting the rule.**
+  `("physicalhost", "a3f9c21b4e77")` — the container-vs-hostname row the
+  correction was ABOUT — is indistinguishable in shape from two genuinely
+  different hosts. **The epic's actual finding: no pure function over two
+  STRINGS can rule this out.** The information needed to tell them apart
+  is not present in the two inputs, no matter how the comparison rule is
+  written — making the string rule cleverer was never going to close this.
+- **Round 3, what ships:** if a pure function cannot resolve identity, it
+  must not be the thing that clears the box. `src/cycle-wrong-box.ts` now
+  has a PURE decision core (`evaluateWrongBoxGuard()` — zero I/O,
+  exhaustively testable, decides nothing it wasn't handed) and an
+  injectable identity-resolution boundary (`WrongBoxIdentityProbe`,
+  `runWrongBoxGuard()` is the thin async runner that gathers evidence
+  through it) that supplies REAL evidence instead: this machine's own
+  network addresses (`getLocalAddresses()` — `os.networkInterfaces()`,
+  purely local, zero network I/O) and the configured target's own
+  addresses, resolved FROM THIS MACHINE (`resolveTargetAddresses()` — a
+  DNS/hosts-file lookup). Same pure-engine/injectable-I/O split this repo
+  already uses everywhere else (`src/wedge.ts` vs `src/wedge-probes.ts`).
+  `"is_target"` requires at least one address to appear in BOTH sets;
+  `"not_target"` requires both sets to resolve successfully and be
+  disjoint; anything else — resolution failure, an empty local-address
+  set, an unconfigured target — is `"inconclusive"`, exactly the
+  first-class "could not look" shape `src/wedge.ts`/`src/recovery.ts`
+  already report elsewhere.
+- **Round 4** — round 3 disclosed "IPv6 representational variance is not
+  normalised" as a residual limitation, filed next to genuine probe
+  failure as if they were the same kind of gap. **They are not, caught
+  again by MEASUREMENT — a real Linux host, not an argument.** (a) A
+  target resolving to a LOOPBACK address could never overlap
+  `getLocalAddresses()`'s own loopback-EXCLUDING set (loopback is excluded
+  from the local set because every machine shares it, so it never
+  distinguishes anything) — and Debian/Ubuntu's OWN DEFAULT `/etc/hosts`
+  maps a machine's hostname to `127.0.1.1`, which `dns.lookup()` (this
+  module's resolver, chosen BECAUSE it consults `/etc/hosts`) duly returns.
+  So `wyzr cycle` run ON the target, configured EXACTLY per this section's
+  own guidance, resolved `not_target` and PROCEEDED — fail-open on
+  precisely the case this guard exists to catch, on a distro default, not
+  an edge case. **Fixed:** any loopback address (`127.0.0.0/8`, `::1`) the
+  TARGET resolves to is now unambiguous evidence this machine IS the
+  target, decided independently of `localAddresses` entirely — a loopback
+  address can only ever mean "the machine that asked," never any other
+  machine, however its own non-loopback interfaces are configured. (b) An
+  IPv4-mapped IPv6 spelling (`::ffff:10.0.0.5`) against its plain IPv4
+  form, and two differently-compressed spellings of the SAME IPv6 address,
+  are not a "cannot resolve" gap at all — **they are the identical address,
+  spelled two ways, the same class of problem as the hostname trim/
+  lowercase this guard already did.** Fixed: every address is reduced to
+  one canonical form (`canonicaliseAddress()`) before any comparison.
+
+**The constraint this mechanism was checked against before it was built:**
+this verb exists for the case where the far box is DEFINITIVELY GONE — when
+the gate says PROVEN, the target does not answer network traffic, by
+construction. Any identity mechanism that needs the TARGET to answer (ssh
+to it, ping it, ask it its own machine-id) would report "could not look"
+and REFUSE exactly when this verb is needed — this epic's own denominator
+trap in a third shape, an instrument whose construction excludes the case
+it exists to serve. `resolveTargetAddresses()` never contacts the target:
+DNS/hosts-file resolution is answered by the MANAGER's own resolver
+configuration, which requires the target to have a stable address on
+record, never that it be reachable or powered on right now.
+
+**Operational requirement this places on deployment, stated here rather
+than assumed:** the configured target
+(`WYZR_CYCLE_WRONG_BOX_TARGET_HOST`, no default, same discipline as every
+other fleet-specific field in this repo) must resolve, from the machine
+`wyzr cycle` runs on, to that target's real address(es) — via DNS or a
+static `/etc/hosts` entry — independent of whether the target is currently
+up.
+
+**What this still cannot detect, and does not claim to:** multi-homed or
+NAT'd addressing this machine's own resolver does not know about at all —
+a genuine "the information is not in the inputs" gap, not a normalisation
+problem (not the same class as round 4's fix); and, structurally, any case
+where either probe call fails or returns nothing — those are
+`"inconclusive"`, never guessed. Address-set overlap (now over
+canonicalised addresses, with loopback resolved as its own special case)
+is real evidence a string comparison could never be — it is not
+omniscience.
+
+### Force (D4) — overrides the VERDICT, never the PRECONDITIONS, and never the wrong-box guard
+
+`decideGate()` (`src/cycle.ts`) implements the rule exactly: when the gate
+says PROVEN, `cycle` acts with no extra ceremony (D5 — "ceremony in the one
+case the product exists for is a design failure"). When the gate says
+NOT_PROVEN or INCONCLUSIVE_BY_SHARED_CAUSE and the run is human-forced, the
+JUDGMENT is overridden and the run proceeds PAST THE GATE — but the
+wrong-box guard and the preconditions are evaluated completely
+independently of that decision, and either can still refuse. **No human
+certainty makes an unreachable cloud reachable, and forcing past it would
+produce exactly the stranding this epic exists to prevent.**
+
+**This is made STRUCTURAL, not conventional.** A boolean parameter threaded
+through a function (`skipPreconditions: true`) is not structural — someone
+adds it next year and nothing breaks. Instead, `src/cycle-preconditions.ts`
+exports a `PreconditionsClearedWitness` type whose brand key is a
+MODULE-PRIVATE `unique symbol`, never exported — no file outside that
+module can even NAME the property this type requires, let alone construct
+one, short of an explicit, visible `as unknown as PreconditionsClearedWitness`
+type-cast a reviewer would have to wave through. `src/cycle-runner.ts`'s
+`performOff()` REQUIRES one of these as a parameter, so "skip the
+preconditions and cut power anyway" is not expressible by adding a flag
+anywhere in this codebase. This is stronger than this repo's existing
+`__brand: "some-literal-string"` convention (`src/wedge.ts`/
+`src/recovery.ts`) — a string-literal brand is still a property anyone can
+spell and assign; a non-exported unique-symbol key cannot be spelled by any
+code outside the module that declares it at all. Pinned at the type level
+in `test/unit/cycle-preconditions.test.ts` (a bare object literal does not
+satisfy the type — verified by removing the `@ts-expect-error` directive
+and observing `bun run typecheck` report a new missing-property error at
+that line before restoring it) and exercised behaviorally in
+`test/unit/cycle-runner.test.ts`'s "force + gate NOT_PROVEN + cloud
+unreachable -> STILL REFUSES" test — the most important test in this
+story, because it is the one that would catch a future change that
+accidentally let force reach past the precondition.
+
+**Force requires all of:** a long, explicit, self-describing flag that
+cannot be hit by accident or pasted reflexively
+(`--force-override-gate-verdict-i-accept-the-risk`); the FULL evidence
+trail and verdict printed BEFORE acting (`src/cli-cycle.ts` runs the
+UNFORCED dry-run preview first, prints it in full, and only then asks for
+confirmation — re-evaluating the preamble a second time when the real run
+follows is not wasted work, since D1 requires the precondition to be
+checked "immediately before" the OFF, and real time has passed while the
+operator read the preview); an interactive confirmation NAMING THE TARGET
+(typing the exact configured target host back); and a SEPARATE flag for the
+genuinely non-interactive case
+(`--force-non-interactive-confirm-target=<target>`) — **the force flag
+alone is never sufficient** (a `--force` with no satisfied confirmation
+refuses with a Usage error, never proceeds). Output records `forced: true`
+and the full evidence the force decision was made against.
+
+### Dry-run (R5) — a primary deliverable, not a flag
+
+**No agent in this fleet can ever execute this verb end to end** — every
+live run is a human on a different machine who CANNOT ask a follow-up
+mid-run. Dry-run is the ONLY way anyone exercises this verb's judgment
+without cutting power to the whole fleet, and **the bar it must meet:
+someone must be able to watch the gate decide NO on a healthy box and see
+exactly why.** That is what earns this verb the right to ever decide YES.
+
+`src/cycle-runner.ts` exposes TWO entry points, not one function with a
+`dryRun: boolean` parameter: `runCycleDryRun(plug: PlugReader, ...)` and
+`runCycleLive(plug: PlugWriter, ...)`. `PlugReader`
+(`src/cycle-plug.ts`) exposes only `readState()`; `PlugWriter` extends it
+with `writePower()`. A write call anywhere inside `runCycleDryRun()`'s body
+does not typecheck, because the parameter's static type has no such
+method — **structurally incapable of writing on every path, including
+force**, not a runtime `if (dryRun) return`. Both entry points share the
+same preamble (gate, wrong-box guard, preconditions), which itself only
+ever touches `PlugReader.readState()` — the precondition check is a READ on
+every path, dry or live.
+
+A dry run that WOULD refuse reuses the exact same refusal code a live run
+would produce (17/18/19) — a refusal is a refusal, dry or not, since
+neither path ever writes on that outcome. **`wyzr cycle --dry-run` gets its
+OWN distinct code (`20`, `cycle_dry_run_would_act`) only for the
+complementary case: every check cleared, so a live run at this exact
+moment would have proceeded to cut power.** This is the deliberate answer
+to "how does a script tell 'dry run: would refuse' from 'dry run: would
+act'" — reusing the refusal codes rather than minting three more (one per
+refusal class) keeps a script that already knows 17/18/19 from `wyzr cycle`
+immediately correct for a dry run too, and a single new code is all that is
+needed to name the one case those three cannot already distinguish.
+
+### Post-cycle verification (D6) — composed, never reimplemented, and a confirmed plug is never enough
+
+**A cycle that ends without a recovery verdict is not a completed cycle.**
+Once the never-give-up restore confirms the plug reads "on",
+`src/cycle-runner.ts` ALWAYS calls `src/recovery-runner.ts`'s
+`runRecoveryCheck()` next — the plug confirming "on" is never, on its own,
+reported as success. `since` is the OFF instant captured from
+`CycleClock.now()` at the moment OFF was attempted, exactly as
+`recovery status --since` requires.
+
+The five recovery verdicts map to their own `cycle`-specific exit codes
+(22-25 above) rather than reusing 13-16: `src/errors.ts`'s own comments on
+13/15/16 document those three as "`wyzr recovery status` only," so reusing
+them here would silently break the scope those comments already promise —
+this file's own rule is that an existing entry is never reordered, reused,
+or modified. RECOVERED is the one exception, reusing exit `0` by symmetry
+with `recovery status`'s own RECOVERED.
+
+**No plug-liveness reading may stand in for a recovery verdict** — this
+verb is the FIRST caller who actually holds a real `PlugReading` (from its
+own precondition check and its own OFF/ON read-backs) and could, in
+principle, be tempted to smuggle one into the recovery engine's evidence.
+It cannot: `src/recovery-runner.ts`'s `RunRecoveryCheckOptions` has no field
+a plug reading could occupy at all, and `src/recovery.ts`'s
+`PlugLivenessReading` remains structurally excluded from every recovery
+evidence collection (see "`wyzr recovery status`" above). Pinned AGAIN,
+independently, in `test/unit/cycle-runner.test.ts` — not only by relying on
+`recovery.test.ts`'s own existing pin — because this is the module the
+epic named as the realistic party who would find a way to pass one in.
+
+### The `--json` contract
+
+`src/cycle-report.ts`'s `CycleJson` (schema version `1`, `command: "cycle"`)
+— allowlist-projected, never a raw spread of `CycleResult`'s internal
+shapes (which carry `__brand` fields and, for `preconditions`, the witness
+machinery that has no business in a published API). The `gate` and
+`recovery` sections are rendered by REUSING `src/cli-wedge.ts`'s
+`toWedgeStatusJson()` and `src/cli-recovery.ts`'s `toRecoveryStatusJson()`
+verbatim — composed, not reimplemented, the same rule the ticket applies to
+the engines themselves. Top-level shape:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "command": "cycle",
+  "outcome": "refused_by_gate" /* | refused_by_wrong_box_guard | refused_by_precondition
+                                  | would_act | stranded | recovered | not_recovered
+                                  | fleet_half_restored | recovery_inconclusive
+                                  | recovery_unconfigured */,
+  "dryRun": false,
+  "forced": false,
+  "reasons": ["..."],           // the full ordered evidence trail
+  "gate": { /* WedgeStatusJson, unchanged shape — see "wyzr wedge status" */ },
+  "wrongBoxGuard": { "outcome": "not_target", "reasons": ["..."] },
+  "preconditions": { "outcome": "cleared", "power": "on", "reachable": true, "note": null },
+  "off": null,                  // populated once OFF is attempted: writeThrew, writeErrorMessage,
+                                 // readBacks[] (attempt/atMs/result/power/reachable/note), finalResult
+  "restore": null,              // populated once the restore runs: attempts[] (each shaped like off,
+                                 // plus attempt/atMs), confirmed, elapsedMs
+  "recovery": null,             // populated only once the restore is confirmed: RecoveryStatusJson,
+                                 // unchanged shape — see "wyzr recovery status"
+  "handRestoreCommand": null    // populated only for outcome === "stranded"
+}
+```
+
+### Configuration
+
+No default for anything that would name a fleet host, plug, or device — the
+target plug is CLI-resolved (`<device>`, like `plug status|on|off`), never
+hard-coded and never guessed. `src/cycle-config.ts`'s
+`loadCycleConfigFromEnv()` composes `src/wedge-config.ts`'s
+`loadWedgeConfigFromEnv()` (the gate's own inputs — the SAME `WYZR_WEDGE_*`
+vars configure the gate here as configure `wyzr wedge status`) and
+`src/recovery-config.ts`'s `loadRecoveryConfigFromEnv()` (the post-cycle
+verifier's own inputs, including its own ssh-host-reuse rule) — composed,
+not duplicated.
+
+| Env var | Meaning | Default |
+| --- | --- | --- |
+| `WYZR_CYCLE_WRONG_BOX_TARGET_HOST` | The wrong-box guard's configured target — see above. | none (unconfigured -> the guard is inconclusive -> refuses) |
+| `WYZR_CYCLE_HAND_RESTORE_COMMAND` | The exact, operator-facing command printed on a STRANDED outcome. | none (the message says so plainly instead of inventing a placeholder) |
+| `WYZR_CYCLE_OFF_TO_ON_WAIT_MS` | Pause between the OFF attempt and starting the restore. | 5000 |
+| `WYZR_CYCLE_OFF_READBACK_POLL_INTERVAL_MS` / `WYZR_CYCLE_OFF_READBACK_BOUND_MS` | The OFF read-back's own bounded retry (R3) — purely evidentiary; the restore always runs regardless of what this concludes (R2). | 2000 / 20000 |
+| `WYZR_CYCLE_RESTORE_READBACK_POLL_INTERVAL_MS` / `WYZR_CYCLE_RESTORE_READBACK_BOUND_MS` | Each ON attempt's own bounded read-back retry. | 2000 / 20000 |
+| `WYZR_CYCLE_RESTORE_POLL_INTERVAL_MS` | Delay between successive ON write attempts in the never-give-up loop. | 10000 |
+| `WYZR_CYCLE_RESTORE_TIMEOUT_MS` | The OUTER bound on the whole never-give-up restore — past this, STRANDED. | 300000 (5 minutes) |
+
+**None of the timing defaults above is derived from the ticket's own n=1
+propagation measurement (~3 seconds, one plug, one network, by hand) — R3
+is explicit that this is not a latency budget.** They are plain, round,
+operator-tunable starting points, stated here as exactly that.
+
+### Tests
+
+Every one of the ticket's seventeen named refusal/behaviour tests exists in
+`test/unit/cycle-runner.test.ts`, each its own named test, and — per the
+epic's widened scope for R6 — each one proves the run actually REACHED the
+decision point it is named for (a fake's own call counter, the composed
+engine's own verdict surfacing in the result, or an evidence-trail line
+only that step could have produced), not merely that it produced the
+right-shaped outcome. `test/unit/cycle.test.ts` covers the pure
+`decideGate()` decision in isolation; `test/unit/cycle-wrong-box.test.ts`
+covers the pure `evaluateWrongBoxGuard()` core (address overlap/disjoint/
+unresolvable, including the epic's own container-vs-hostname worked example
+now correctly resolvable through address evidence — the round-2 regression
+pin that a string-shape-only rule can never come back — and the round-4
+regression pins: a target resolving to loopback still reaches `is_target`
+even though the local set excludes loopback, and two differently-spelled
+forms of the identical address — IPv4-mapped IPv6 against plain IPv4, and
+two IPv6 compressions — compare equal), `runWrongBoxGuard()`'s concurrent
+probe-gathering, and `RealWrongBoxIdentityProbe`'s DNS/network-interface
+classification with both real (localhost/this machine's own interfaces)
+and injected-failure calls; `test/unit/cycle-preconditions.test.ts`
+covers the witness's structural pin; `test/unit/cycle-clock.test.ts` proves
+no real timer ever runs and that omitting the clock is a compile error;
+`test/unit/cycle-config.test.ts` and `test/unit/cycle-report.test.ts` cover
+config loading and the `--json`/human rendering; `test/unit/cli-cycle.test.ts`
+covers argument parsing and the force ceremony end to end, including one
+full live cycle that actually exercises `RealCyclePlugTransport`'s
+`readState()`/`writePower()` through a simulated plug (a mutable P3 the
+fake transport's `setPropertyHandler` updates and `getPropertyListHandler`
+reflects back) — real request/response shaping, zero network.
+
+No message, note, reason string, or `--json` field anywhere in this verb
+attributes a WHY to a failure it did not observe — a thrown read/write
+error's message is relayed VERBATIM into the evidence trail, never
+re-interpreted (pinned in `test/unit/cycle-runner.test.ts`'s "no failure
+code is reasoned backwards to a cause" test).
+
+### The honesty split — what this verb stands on, and what it does not
+
+**THE READ PRIMITIVES ARE LIVE-PROVEN AS OF 2026-09-11**, through this
+repo's own code, against a real account, at the approved sha: `devices
+list` (sixteen rows matching an earlier hand measurement mac-for-mac),
+`devices list --json`, and `plug status` on two real plugs, all exit `0`
+with correct states. So login, the auth-host envelope decode, the
+device-host body, the `get_property_list` field names, and the P3/P5
+string decoding are exercised end to end — **this verb's PRECONDITION check
+stands on proven primitives**, since it is exactly one such read.
+
+**THE WRITE PRIMITIVES HAVE NEVER BEEN EXERCISED BY THIS CODE. NOT ONCE, BY
+ANYONE, EVER.** `plug on`/`plug off` were deliberately NOT run in that
+acceptance. The `set_property` field names and `pvalue` string typing were
+measured BY HAND in Python and this code ships those names, but no write
+has gone through `wyzr` itself. **`wyzr cycle` is off-then-on and is built
+ENTIRELY on the unexercised half.**
+
+**NO CYCLE HAS EVER BEEN RUN BY THIS CODE AGAINST A REAL PLUG OR A REAL
+BOX.** A human pulled this lever once, by hand, outside this product, and
+the box came back — that establishes the plug controls the box's power and
+that cutting it does not brick it. **It establishes NOTHING about this
+repo's code.** Evidence, not coverage.
+
+Every code path in this section — the gate, the wrong-box guard, the
+preconditions, the OFF/wait/ON sequence, the recovery composition, both CLI
+entry points — is exercised only against `FakeWedgeProbes`/
+`FakeRecoveryProbes`/`FakeCyclePlugTransport`/`FakeWyzeTransport` in this
+suite, per this ticket's own absolute rule: **no plug is switched by this
+task, not the fleet plug, not a "safe" test plug, not to find out what
+something powers.** A green gate here proves this code does what THIS
+REPO believes the Wyze write API does; it cannot prove that belief is
+correct. That first real write is WYZR-20's own deliberately staged
+rehearsal, not this one.
 
 ## Development
 

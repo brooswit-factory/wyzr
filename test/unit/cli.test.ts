@@ -5,6 +5,7 @@ import {
   dispatchDevices,
   dispatchPlug,
   dispatchRecovery,
+  dispatchCycle,
   parseArgs,
   run,
 } from "../../src/cli.ts";
@@ -305,6 +306,25 @@ describe("run — wedge command routing (subcommand validation only; the real wi
     expect(code).toBe(ExitCode.Usage);
     expect(errSpy).toHaveBeenCalledWith("Unknown wedge subcommand: frobnicate");
     errSpy.mockRestore();
+  });
+});
+
+describe("run — cycle command routing (argument validation only; the real wiring is src/cli-cycle.ts's own tests, against fake probes)", () => {
+  // Exercises defaultDispatch()'s own `command === "cycle"` branch through
+  // the full run() boundary — a missing device argument throws before
+  // defaultCycleCommandDeps' real credentials/transport/probes are ever
+  // touched, so this stays zero-network, zero-credentials.
+  test("`cycle` with no device argument is a Usage error, not a network attempt", async () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    const code = await run(["cycle"]);
+    expect(code).toBe(ExitCode.Usage);
+    expect(errSpy.mock.calls[0]?.[0]).toContain("Usage: wyzr cycle <device>");
+    errSpy.mockRestore();
+  });
+
+  test("dispatchCycle() throws the same Usage error directly, without needing the full run() boundary", async () => {
+    await expect(dispatchCycle([], false)).rejects.toThrow(CliError);
+    await expect(dispatchCycle([], false)).rejects.toThrow(/Usage: wyzr cycle <device>/);
   });
 });
 
