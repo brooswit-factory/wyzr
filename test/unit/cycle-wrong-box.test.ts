@@ -27,6 +27,78 @@ describe("evaluateWrongBoxGuard (pure core) — is_target: overlapping addresses
   });
 });
 
+describe(
+  "evaluateWrongBoxGuard (pure core) — ROUND 4 regression pin: a target resolving to LOOPBACK is unambiguously this machine, even though the local set structurally excludes loopback (WYZR-27, 2026-09-11)",
+  () => {
+    // Watched fail first: before this fix, this exact call returned
+    // "not_target" — PROCEED — because getLocalAddresses() deliberately
+    // excludes loopback entries (every machine shares the same one, so it
+    // never distinguishes anything), so a target resolving to loopback
+    // could never overlap the local set. This is the Debian/Ubuntu
+    // default in practice: /etc/hosts maps a machine's own hostname to
+    // 127.0.1.1, and dns.lookup() (chosen because it consults
+    // /etc/hosts) returns that for the machine's own hostname — so
+    // running wyzr cycle ON the target, configured EXACTLY per this
+    // file's own guidance, used to fail open on precisely the case this
+    // guard exists to catch.
+    test("target resolves to 127.0.0.1 -> is_target, even though the local address set (which excludes loopback) is disjoint from it", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["127.0.0.1"], ["10.0.0.9", "192.168.1.9"]);
+      expect(result.outcome).toBe("is_target");
+      expect(result.reasons.join(" ")).toContain("LOOPBACK");
+    });
+
+    test("target resolves to the Debian/Ubuntu default self-hostname address 127.0.1.1 -> is_target", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["127.0.1.1"], ["10.0.0.9"]);
+      expect(result.outcome).toBe("is_target");
+    });
+
+    test("target resolves to the IPv6 loopback ::1 -> is_target", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["::1"], ["10.0.0.9"]);
+      expect(result.outcome).toBe("is_target");
+    });
+
+    test("a loopback address among SEVERAL resolved target addresses still wins -> is_target, even when another resolved address is genuinely disjoint from the local set", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5", "127.0.0.1"], ["10.0.0.9"]);
+      expect(result.outcome).toBe("is_target");
+    });
+  },
+);
+
+describe(
+  "evaluateWrongBoxGuard (pure core) — ROUND 4 regression pin: two spellings of the IDENTICAL address must compare equal, not 'cannot detect' (WYZR-27, 2026-09-11)",
+  () => {
+    // Watched fail first: both rows below returned "not_target" before
+    // this fix — a plain string-equality comparison treats
+    // "::ffff:10.0.0.5" and "10.0.0.5", or two differently-compressed
+    // spellings of the same IPv6 address, as different addresses, even
+    // though they name the identical machine. Review's own framing: this
+    // is a pure NORMALISATION problem (the same class as the trim/
+    // lowercase this guard already does for hostnames), not a "cannot
+    // resolve" gap — so it does not belong on the disclosed-limitations
+    // list, it belongs fixed.
+
+    test("an IPv4-mapped IPv6 spelling of the target's address matches the plain IPv4 form on the local side -> is_target", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5"], ["::ffff:10.0.0.5"]);
+      expect(result.outcome).toBe("is_target");
+    });
+
+    test("the same IPv4-mapped/plain mismatch, reversed sides -> is_target", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["::ffff:10.0.0.5"], ["10.0.0.5"]);
+      expect(result.outcome).toBe("is_target");
+    });
+
+    test("a zero-compressed IPv6 address matches its fully-expanded spelling -> is_target", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["2001:db8::1"], ["2001:0db8:0000:0000:0000:0000:0000:1"]);
+      expect(result.outcome).toBe("is_target");
+    });
+
+    test("normalisation does not manufacture a false match: two DIFFERENT IPv6 addresses, both expanded, still compare not_target", () => {
+      const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["2001:db8::1"], ["2001:db8::2"]);
+      expect(result.outcome).toBe("not_target");
+    });
+  },
+);
+
 describe("evaluateWrongBoxGuard (pure core) — not_target: disjoint, both successfully resolved (real evidence, not a shape heuristic)", () => {
   test("genuinely different address sets -> not_target", () => {
     const result = evaluateWrongBoxGuard(TARGET_FIXTURE, ["10.0.0.5"], ["10.0.0.9"]);

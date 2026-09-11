@@ -76,13 +76,36 @@
 // currently up. See README's "wyzr cycle" section, "The wrong-box guard,"
 // for this same requirement written out for an operator.
 //
+// ROUND 4 (WYZR-27, 2026-09-11): round 3 disclosed "IPv6 representational
+// variance is not normalised" as a residual limitation, next to genuine
+// probe failure, as if both were the same kind of gap. Review caught,
+// again by MEASUREMENT (a real Linux host, not an argument): they are NOT
+// the same kind of gap. (a) A target resolving to a LOOPBACK address
+// (Debian/Ubuntu's own default — `/etc/hosts` maps a machine's own
+// hostname to `127.0.1.1`, and `dns.lookup()` returns it) could never
+// overlap `getLocalAddresses()`'s own loopback-EXCLUDING set — `wyzr
+// cycle` run ON the target, configured EXACTLY per this file's own
+// guidance, resolved not_target and PROCEEDED, on precisely the case this
+// guard exists to catch. Fixed: `isLoopbackAddress()` below treats ANY
+// loopback address the TARGET resolves to as unambiguous evidence THIS
+// machine is the target, independent of `localAddresses` entirely. (b) An
+// IPv4-mapped IPv6 spelling (`::ffff:10.0.0.5`) against its plain IPv4
+// form, and two differently-compressed spellings of the identical IPv6
+// address, are not a "cannot resolve" gap at all — they are the SAME
+// address, spelled two ways, the identical class of problem as the
+// hostname trim/lowercase this guard already did. Fixed:
+// `canonicaliseAddress()` below reduces both forms to one representation
+// before any comparison.
+//
 // WHAT THIS STILL CANNOT DETECT, AND DOES NOT CLAIM TO: multi-homed or
-// NAT'd addressing that this machine's own resolver does not know about;
-// IPv6 representational variance (a `::ffff:`-mapped IPv4 address is not
-// normalised against its bare IPv4 form); and, structurally, ANY case
-// where `resolveTargetAddresses()` or `getLocalAddresses()` fails or
-// returns nothing — those are `"inconclusive"`, not guessed. Address-set
-// overlap is real evidence a string comparison could never be — it is not
+// NAT'd addressing that this machine's own resolver does not know about at
+// all (a genuine "the information is not in the inputs" gap, not a
+// normalisation problem — this is NOT the same class as (b) above); and,
+// structurally, ANY case where `resolveTargetAddresses()` or
+// `getLocalAddresses()` fails or returns nothing — those are
+// `"inconclusive"`, not guessed. Address-set overlap (now over
+// canonicalised addresses, with loopback resolved as a special case) is
+// real evidence a string comparison could never be — it is not
 // omniscience.
 
 import { networkInterfaces } from "node:os";
@@ -95,8 +118,103 @@ export interface WrongBoxGuardResult {
   readonly reasons: readonly string[];
 }
 
-function normaliseAddress(address: string): string {
-  return address.trim().toLowerCase();
+const IPV4_LOOKALIKE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+const IPV4_MAPPED_IPV6 = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
+
+/**
+ * Expands a bare IPv6 address (no IPv4-mapped suffix — see
+ * `canonicaliseAddress()`, which handles that case first) to its full
+ * 8-group, leading-zero-free, lowercase form — e.g. `2001:db8::1` and
+ * `2001:0db8:0000:0000:0000:0000:0000:1` both become
+ * `2001:db8:0:0:0:0:0:1`. `null` for anything not IPv6-shaped at all.
+ * ROUND 4 (WYZR-27, 2026-09-11): without this, two textually different
+ * spellings of the identical address compared as plain strings — never a
+ * "cannot resolve" gap, a pure normalisation problem this guard already
+ * solves for hostnames (trim/case) but had not yet solved for addresses.
+ */
+function expandIPv6(value: string): string | null {
+  if (!value.includes(":")) return null;
+  const segments = value.split("::");
+  if (segments.length > 2) return null; // more than one "::" is not valid IPv6
+  let head: string[];
+  let tail: string[];
+  if (segments.length === 2) {
+    head = segments[0] ? segments[0].split(":") : [];
+    tail = segments[1] ? segments[1].split(":") : [];
+  } else {
+    head = value.split(":");
+    tail = [];
+    if (head.length !== 8) return null;
+  }
+  const missing = 8 - head.length - tail.length;
+  if (missing < 0) return null;
+  const groups = [...head, ...Array(Math.max(missing, 0)).fill("0"), ...tail];
+  if (groups.length !== 8) return null;
+  const normalisedGroups: string[] = [];
+  for (const group of groups) {
+    const parsed = Number.parseInt(group, 16);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 0xffff) return null;
+    normalisedGroups.push(parsed.toString(16));
+  }
+  return normalisedGroups.join(":");
+}
+
+/**
+ * Reduces an address string to ONE canonical form so textually different
+ * spellings of the identical address compare equal — trim/lowercase
+ * (shared with hostname normalisation elsewhere in this file), an
+ * IPv4-mapped IPv6 address (`::ffff:10.0.0.5`) reduced to its plain IPv4
+ * form, and a bare IPv6 address fully expanded (see `expandIPv6()`).
+ * Anything this function does not recognise (a plain IPv4 literal, or a
+ * genuinely unparseable string) passes through unchanged — this function
+ * only ever makes two representations of the SAME address compare equal;
+ * it never invents equality between two different addresses.
+ */
+function canonicaliseAddress(address: string): string {
+  const value = address.trim().toLowerCase();
+  const v4Mapped = IPV4_MAPPED_IPV6.exec(value);
+  if (v4Mapped) return v4Mapped[1]!;
+  if (IPV4_LOOKALIKE.test(value)) return value;
+  return expandIPv6(value) ?? value;
+}
+
+/**
+ * ROUND 4 (WYZR-27, 2026-09-11): a loopback address (`127.0.0.0/8`,
+ * `::1`) resolved for the CONFIGURED TARGET is, by definition, THIS
+ * machine — `resolveTargetAddresses()` is answered by this machine's own
+ * resolver, and a loopback address can never mean any OTHER machine, no
+ * matter whose name resolved to it. This is NOT a comparison against
+ * `localAddresses` (which deliberately excludes loopback — see
+ * `WrongBoxIdentityProbe.getLocalAddresses()` — since every machine
+ * shares the same loopback address, so it is useless for telling machines
+ * APART; but showing up as the TARGET's OWN resolution is a completely
+ * different, and unambiguous, kind of evidence).
+ *
+ * WHY THIS MATTERS IN PRACTICE, caught by review measuring a real Linux
+ * host rather than arguing about one: Debian/Ubuntu's default
+ * `/etc/hosts` maps a machine's own hostname to `127.0.1.1` (not just
+ * `127.0.0.1`), and `dns.lookup()` (this module's resolver, chosen
+ * BECAUSE it consults `/etc/hosts`) returns that address for the
+ * machine's own hostname. Without this check, `wyzr cycle` run ON the
+ * target machine, with the target CONFIGURED CORRECTLY per this file's
+ * own guidance (the exact string `os.hostname()` returns), would resolve
+ * the target to a loopback address that never overlaps the (loopback-
+ * excluding) local set — `not_target`, PROCEED, on precisely the case
+ * this guard exists to catch. Checked BEFORE this line ever ran: watched
+ * it fail exactly this way, transcript in the PR.
+ */
+// `canonicaliseAddress("::1")` fully expands to "0:0:0:0:0:0:0:1" (see
+// expandIPv6()) — this constant is that same expansion, not the
+// compressed spelling, so the comparison below actually matches what this
+// function is ever handed. Verified by the "IPv6 loopback ::1" test: this
+// line originally compared against the literal `"::1"` and never matched
+// anything, since every address here has already been through
+// canonicaliseAddress() by the time isLoopbackAddress() sees it — caught
+// by that test failing on first run, not by inspection.
+const CANONICAL_IPV6_LOOPBACK = "0:0:0:0:0:0:0:1";
+
+function isLoopbackAddress(canonicalAddress: string): boolean {
+  return canonicalAddress === CANONICAL_IPV6_LOOPBACK || canonicalAddress.startsWith("127.");
 }
 
 /**
@@ -154,8 +272,27 @@ export function evaluateWrongBoxGuard(
     };
   }
 
-  const local = new Set(localAddresses.map(normaliseAddress));
-  const overlap = targetAddresses.map(normaliseAddress).filter((address) => local.has(address));
+  const canonicalTargetAddresses = targetAddresses.map(canonicaliseAddress);
+
+  // Checked BEFORE the overlap comparison, and independently of
+  // `localAddresses` — see isLoopbackAddress()'s own comment for why a
+  // loopback resolution is unambiguous evidence regardless of what the
+  // (loopback-excluding) local set contains.
+  const loopbackTargetAddresses = canonicalTargetAddresses.filter(isLoopbackAddress);
+  if (loopbackTargetAddresses.length > 0) {
+    return {
+      outcome: "is_target",
+      reasons: [
+        `wrong-box guard: the configured target ("${configuredTarget}") resolves to a LOOPBACK address ` +
+          `(${loopbackTargetAddresses.join(", ")}) — a loopback address can only ever mean the machine that ` +
+          "resolved it, i.e. THIS machine, regardless of what its own non-loopback interfaces report — " +
+          "REFUSING: this machine IS the target, whatever the gate said",
+      ],
+    };
+  }
+
+  const local = new Set(localAddresses.map(canonicaliseAddress));
+  const overlap = canonicalTargetAddresses.filter((address) => local.has(address));
 
   if (overlap.length > 0) {
     return {

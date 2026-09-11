@@ -2331,7 +2331,7 @@ is tuned to it; the poll interval and the bound are both plain, configured,
 round-number defaults (see "Configuration" below), documented as exactly
 that.
 
-### The wrong-box guard (D7) — three rounds to get right, and why
+### The wrong-box guard (D7) — four rounds to get right, and why
 
 `cycle` must REFUSE when the machine it runs on is the machine it is about
 to cut. **There is no "run it from the fleet box" escape hatch, anywhere,
@@ -2340,7 +2340,7 @@ unconditionally, before this verb ever acts on the gate's verdict or the
 preconditions, on every path including `--force` and `--dry-run` (dry-run
 REPORTS its finding rather than skipping the check).
 
-**This guard went through three rounds before it was right, and the history
+**This guard went through four rounds before it was right, and the history
 is worth keeping — it is a small, self-contained instance of exactly what
 this epic exists to catch.**
 
@@ -2382,6 +2382,30 @@ this epic exists to catch.**
   set, an unconfigured target — is `"inconclusive"`, exactly the
   first-class "could not look" shape `src/wedge.ts`/`src/recovery.ts`
   already report elsewhere.
+- **Round 4** — round 3 disclosed "IPv6 representational variance is not
+  normalised" as a residual limitation, filed next to genuine probe
+  failure as if they were the same kind of gap. **They are not, caught
+  again by MEASUREMENT — a real Linux host, not an argument.** (a) A
+  target resolving to a LOOPBACK address could never overlap
+  `getLocalAddresses()`'s own loopback-EXCLUDING set (loopback is excluded
+  from the local set because every machine shares it, so it never
+  distinguishes anything) — and Debian/Ubuntu's OWN DEFAULT `/etc/hosts`
+  maps a machine's hostname to `127.0.1.1`, which `dns.lookup()` (this
+  module's resolver, chosen BECAUSE it consults `/etc/hosts`) duly returns.
+  So `wyzr cycle` run ON the target, configured EXACTLY per this section's
+  own guidance, resolved `not_target` and PROCEEDED — fail-open on
+  precisely the case this guard exists to catch, on a distro default, not
+  an edge case. **Fixed:** any loopback address (`127.0.0.0/8`, `::1`) the
+  TARGET resolves to is now unambiguous evidence this machine IS the
+  target, decided independently of `localAddresses` entirely — a loopback
+  address can only ever mean "the machine that asked," never any other
+  machine, however its own non-loopback interfaces are configured. (b) An
+  IPv4-mapped IPv6 spelling (`::ffff:10.0.0.5`) against its plain IPv4
+  form, and two differently-compressed spellings of the SAME IPv6 address,
+  are not a "cannot resolve" gap at all — **they are the identical address,
+  spelled two ways, the same class of problem as the hostname trim/
+  lowercase this guard already did.** Fixed: every address is reduced to
+  one canonical form (`canonicaliseAddress()`) before any comparison.
 
 **The constraint this mechanism was checked against before it was built:**
 this verb exists for the case where the far box is DEFINITIVELY GONE — when
@@ -2404,12 +2428,14 @@ static `/etc/hosts` entry — independent of whether the target is currently
 up.
 
 **What this still cannot detect, and does not claim to:** multi-homed or
-NAT'd addressing this machine's own resolver does not know about; IPv6
-representational variance (a `::ffff:`-mapped IPv4 address is not
-normalised against its bare IPv4 form); and, structurally, any case where
-either probe call fails or returns nothing — those are `"inconclusive"`,
-never guessed. Address-set overlap is real evidence a string comparison
-could never be — it is not omniscience.
+NAT'd addressing this machine's own resolver does not know about at all —
+a genuine "the information is not in the inputs" gap, not a normalisation
+problem (not the same class as round 4's fix); and, structurally, any case
+where either probe call fails or returns nothing — those are
+`"inconclusive"`, never guessed. Address-set overlap (now over
+canonicalised addresses, with loopback resolved as its own special case)
+is real evidence a string comparison could never be — it is not
+omniscience.
 
 ### Force (D4) — overrides the VERDICT, never the PRECONDITIONS, and never the wrong-box guard
 
@@ -2601,10 +2627,14 @@ right-shaped outcome. `test/unit/cycle.test.ts` covers the pure
 covers the pure `evaluateWrongBoxGuard()` core (address overlap/disjoint/
 unresolvable, including the epic's own container-vs-hostname worked example
 now correctly resolvable through address evidence — the round-2 regression
-pin that a string-shape-only rule can never come back), `runWrongBoxGuard()`'s
-concurrent probe-gathering, and `RealWrongBoxIdentityProbe`'s DNS/
-network-interface classification with both real (localhost/this machine's
-own interfaces) and injected-failure calls; `test/unit/cycle-preconditions.test.ts`
+pin that a string-shape-only rule can never come back — and the round-4
+regression pins: a target resolving to loopback still reaches `is_target`
+even though the local set excludes loopback, and two differently-spelled
+forms of the identical address — IPv4-mapped IPv6 against plain IPv4, and
+two IPv6 compressions — compare equal), `runWrongBoxGuard()`'s concurrent
+probe-gathering, and `RealWrongBoxIdentityProbe`'s DNS/network-interface
+classification with both real (localhost/this machine's own interfaces)
+and injected-failure calls; `test/unit/cycle-preconditions.test.ts`
 covers the witness's structural pin; `test/unit/cycle-clock.test.ts` proves
 no real timer ever runs and that omitting the clock is a compile error;
 `test/unit/cycle-config.test.ts` and `test/unit/cycle-report.test.ts` cover
