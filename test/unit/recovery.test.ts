@@ -85,24 +85,56 @@ describe("evaluateRecovery — reboot check (named tests 1/2/3)", () => {
     expect(result.verdict).toBe(RecoveryVerdict.NotRecovered);
   });
 
-  test("named test 2: a box whose clock is BEHIND produces neither a false PASS nor a false FAIL", () => {
-    // The engine never compares wall-clock instants across machines at all
-    // — it compares two durations, each from one clock — so a box's clock
-    // being behind (or ahead) cannot even enter this computation. A behind
-    // clock could only ever bias a WALL-CLOCK boot-time comparison; this
-    // input constructs the box's own honestly-reported uptime duration
-    // (unaffected by its own clock's wall-clock skew) and asserts the
-    // verdict tracks reality (booted after the cut) regardless.
+  test("uptime just under elapsed (the PASS side of the boundary): reboot check passes", () => {
+    // Renamed from the pre-review "named test 2: BEHIND"/"named test 2:
+    // AHEAD" pair (a review caught them byte-identical, constructing no
+    // skewed clock — see the type-level pin immediately below for what
+    // actually proves named test 2's property). This test asserts only
+    // what it can honestly claim: the ordinary PASS branch of the duration
+    // comparison, one tick under the threshold.
     const result = evaluateRecovery(recoveredInput({ uptime: uptime({ uptimeMs: ELAPSED - 1 }) }));
     expect(result.checks.reboot).toBe("pass");
     expect(result.verdict).toBe(RecoveryVerdict.Recovered);
   });
 
-  test("named test 2: a box whose clock is AHEAD produces neither a false PASS nor a false FAIL", () => {
-    const result = evaluateRecovery(recoveredInput({ uptime: uptime({ uptimeMs: ELAPSED - 1 }) }));
-    expect(result.checks.reboot).toBe("pass");
-    expect(result.verdict).toBe(RecoveryVerdict.Recovered);
-  });
+  test(
+    "named test 2: RecoveryUptimeObservation admits no wall-clock/boot-instant field — a type-level pin " +
+      "against reintroducing a cross-machine instant comparison",
+    () => {
+      // THE ACTUAL PROOF of "a box whose clock is behind/ahead produces
+      // neither a false PASS nor a false FAIL": there is no wall-clock
+      // input through which skew COULD enter this computation at all — the
+      // engine only ever sees a DURATION (uptimeMs), never a boot INSTANT.
+      // A prior version of this test suite asserted that property with two
+      // byte-identical tests that could not (and did not) construct a
+      // skewed clock, and did not break when the hazard was reintroduced —
+      // caught in review. This pins the property structurally instead:
+      // adding a boot-instant-shaped field to RecoveryUptimeObservation is
+      // exactly the widening that would let assessReboot() start comparing
+      // wall-clock instants again.
+      //
+      // Verified by ACTUALLY reintroducing the hazard: added an optional
+      // `bootInstantMs?: number` to RecoveryUptimeObservation and made
+      // assessReboot() prefer it (mirroring the review's own mutation),
+      // ran `bun run typecheck`, and observed THIS directive itself fail
+      // as an unused '@ts-expect-error' directive (the excess-property
+      // error below no longer fires once the field legitimately exists) —
+      // see the PR description for the exact transcript. Reverted; restored
+      // to green.
+      const withBootInstant: RecoveryUptimeObservation = {
+        __brand: "recovery-uptime",
+        outcome: "observed",
+        uptimeMs: 1000,
+        note: null,
+        // @ts-expect-error — RecoveryUptimeObservation has no field for a wall-clock boot instant (excess
+        // property check on this literal). If this line ever stops erroring, such a field has been added
+        // to the type, and this directive itself becomes an "unused @ts-expect-error" compile error — the
+        // pin this test exists to provide.
+        bootInstantMs: SINCE,
+      };
+      void withBootInstant;
+    },
+  );
 
   test("named test 3: a plug that flickered without the box restarting FAILS the reboot check", () => {
     // "Flickered" means power was cut and restored but the box's own
