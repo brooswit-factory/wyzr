@@ -2957,13 +2957,28 @@ instead, each blind to what the other two catch:**
   than a static relative import (dynamic `import()`, a string-built
   specifier) — none exist in this repo today, but this check would not
   notice one appearing.
-- **A source-level grep** (`test/unit/doctor-no-write.test.ts`) over this
-  command's own four new files for a `writePower(`/`.setProperty(` call
-  site, with a line-count floor (>400) so an accidentally-empty scan cannot
-  pass silently. Watched RED first (a real call site was inserted, the test
-  was confirmed to catch it, then removed). **What this CANNOT see:** a
-  write reached through an aliased or dynamically-constructed method name,
-  or one hiding inside a file this list does not name.
+- **A source-level grep over a DERIVED file set** (`test/unit/doctor-no-write.test.ts`)
+  for a `writePower(`/`.setProperty(` call site, with a line-count floor
+  (>400). **This one was itself the subject of a review finding, fixed in
+  this PR**: it originally scanned a HARDCODED four-file array
+  (`doctor.ts`/`doctor-plug.ts`/`doctor-runner.ts`/`cli-doctor.ts`), which
+  meant a brand-new fifth module reaching `writePower()` was invisible to
+  it — measured live: a `src/doctor-extra.ts` exporting a `PlugWriter`-typed
+  function that calls `plug.writePower("0")`, imported from
+  `src/doctor-runner.ts`, passed typecheck AND all three checks (833 pass
+  / 0 fail) before the fix. **The fix derives the scanned set from the same
+  import-closure walk `test/unit/doctor-imports.test.ts` performs from
+  `src/cli-doctor.ts`**, excluding only `src/auth-session.ts`/
+  `src/cycle-plug.ts` (measured to be the entire set of legitimate
+  `writePower`/`setProperty` DEFINERS in the 31-module closure) — this
+  fails CLOSED: a new doctor-adjacent module is automatically IN the
+  scanned set the moment it becomes reachable, with nobody having to
+  remember to add it. Re-running the same attack against the fixed test
+  now fails it, naming the exact file and line. **What this CANNOT see,
+  even after the fix:** a write reached through a dynamic `import()`, a
+  string-built specifier, an aliased or dynamically-constructed method
+  name, or one hiding inside a module added to the definer allowlist for a
+  reason other than legitimately defining the write boundary.
 
 None of the three alone is the property; together they cover typing,
 reachability, and literal call sites — three different failure shapes, not

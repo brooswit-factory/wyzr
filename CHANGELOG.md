@@ -56,8 +56,14 @@ All notable changes to this project are documented in this file.
   watched RED first),`test/unit/doctor-plug.test.ts` (a mutation-tested
   `@ts-expect-error` pin proving a write call inside a function typed to
   accept only `PlugReader` does not typecheck), and
-  `test/unit/doctor-no-write.test.ts` (a source-level grep, watched RED
-  first, with a line-count floor) — three checks, each blind to a different
+  `test/unit/doctor-no-write.test.ts` (a source-level grep over a file set
+  DERIVED from the same import-closure walk `doctor-imports.test.ts`
+  performs, minus a 2-entry allowlist of legitimate `writePower`/
+  `setProperty` definers — fails CLOSED, so a new doctor-adjacent module is
+  automatically scanned the moment it becomes reachable, unlike this
+  check's own first version, which review caught scanning a HARDCODED
+  four-file array that a fifth, newly-added module reaching `writePower()`
+  passed straight through) — three checks, each blind to a different
   failure shape.
   - Reports config/credentials presence+permission (never a configured
     value), a login attempt's success/failure (relayed VERBATIM, never
