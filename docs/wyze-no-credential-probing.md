@@ -190,10 +190,14 @@ worktrees. The defect was in the instrument — the acceptance criterion
 itself — not in anyone's claim, which is what made it worth recording
 here.
 
-Surfacing the auth host's `requestId` in an error message would make this
-class of check self-verifying, and would be independently useful for a
-support trail — but that's a `src/` change with its own consequences (see
-the redaction constraints above), and is deliberately not done as a side
+`wyzeGenericAuthApiError()` already surfaces the auth host's `requestId`
+for every auth-host error except the errorCode-1000 credentials path this
+worked example is about — that path routes to
+`wyzeInvalidCredentialsOrSsoOnlyError()`, which takes no envelope and so
+cannot print it. Closing that one remaining path would make this class of
+check self-verifying there too, and is independently useful for a support
+trail — but that's a `src/` change with its own consequences (see the
+redaction constraints above), and is deliberately not done as a side
 effect of writing this section. File it if you think it should happen.
 
 ## What this procedure cannot do, and what actually needed a real account
