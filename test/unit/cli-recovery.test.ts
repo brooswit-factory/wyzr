@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ExitCode } from "../../src/errors.ts";
+import { CliError, ExitCode } from "../../src/errors.ts";
 import {
   defaultRecoveryStatusDeps,
   formatRecoveryStatusHuman,
@@ -263,8 +263,19 @@ describe("defaultRecoveryStatusDeps — the real (production) wiring, exercised 
     expect(defaultRecoveryStatusDeps.createRecoveryProbes()).toBeInstanceOf(RealRecoveryProbes);
   });
 
-  test("loadConfig() returns a RecoveryConfig with at least localConnectivity populated", () => {
-    const config = defaultRecoveryStatusDeps.loadConfig();
-    expect(config.localConnectivity).toBeDefined();
+  // WYZR-20/WYZR-28: loadConfig() now reads a REAL config.json from disk
+  // (src/config.ts's loadWyzrConfig()) — see cli-wedge.test.ts's identical
+  // comment for the "real, local-only I/O" precedent and why both outcomes
+  // (a real config, or a ConfigInvalid refusal) are accepted here. The
+  // loader's own full behavior is covered exhaustively by
+  // test/unit/config.test.ts against fixture files.
+  test("loadConfig() either returns a real RecoveryConfig or refuses with ConfigInvalid — never anything else", () => {
+    try {
+      const config = defaultRecoveryStatusDeps.loadConfig();
+      expect(config.localConnectivity).toBeDefined();
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).exitCode).toBe(ExitCode.ConfigInvalid);
+    }
   });
 });

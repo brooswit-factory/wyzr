@@ -1,24 +1,39 @@
-// Aggregates config for `wyzr cycle`. Reuses src/wedge-config.ts's
-// `loadWedgeConfigFromEnv()` for the gate's own inputs (jira/github/ssh/
-// tunnel-ping/local-connectivity — the SAME `WYZR_WEDGE_*` env vars
-// configure the gate here as configure `wyzr wedge status`, because this
-// verb calls the exact same gate) and src/recovery-config.ts's
-// `loadRecoveryConfigFromEnv()` for the post-cycle verifier's own inputs —
-// composing both rather than duplicating either. Only the fields genuinely
-// new to this verb — the wrong-box guard's target, the hand-restore
-// command, and this verb's own timing bounds — get new env vars below.
-// Which device to cycle is NOT one of them: like `plug status|on|off`, it
-// is a CLI positional argument (src/cli-cycle.ts), resolved through the
-// same src/device-resolve.ts path, not a second, parallel config surface.
+// The CycleConfig/CycleTimingConfig shapes for `wyzr cycle`.
+//
+// WYZR-20/WYZR-28: this module used to ALSO own `loadCycleConfigFromEnv()`,
+// a provisional env-var-backed loader composing src/wedge-config.ts's
+// `loadWedgeConfigFromEnv()` (the gate's own inputs) and
+// src/recovery-config.ts's `loadRecoveryConfigFromEnv()` (the post-cycle
+// verifier's own inputs) with a handful of genuinely new fields (the
+// wrong-box guard's target, the hand-restore command, this verb's own
+// timing bounds). That loader has been REMOVED: `src/config.ts`'s
+// `loadWyzrConfig()` is now the ONE configuration surface — see that
+// module's own top comment for the ruling, and for why `wrongBoxTargetHost`
+// is no longer its own independently-settable value at all: it is now the
+// SAME required `suspectBox` host the gate's own ssh direct path uses,
+// deliberately, so a file/env (or, now, a file-internal) disagreement
+// between "which box is wedged" and "which box the wrong-box guard is
+// guarding" cannot exist.
+//
+// Which device to cycle is STILL not one of these fields: like `plug
+// status|on|off`, it is a CLI positional argument (src/cli-cycle.ts),
+// resolved through the same src/device-resolve.ts path, not a config
+// surface. (`src/config.ts`'s `fleetPlug`/`safePlug` are a SEPARATE concern
+// — identifiers a later task's write-rehearsal command will consume, not
+// wired into this verb's own device resolution.)
 //
 // Every fleet-specific field (the wrong-box target, the hand-restore
-// command) defaults to UNCONFIGURED unless the operator supplies it — same
-// discipline as src/wedge-config.ts/src/recovery-config.ts, and for the
-// sharpest possible reason here: an unconfigured target must never
-// silently fall back to a guess for a verb that cuts real power.
+// command) still defaults to UNCONFIGURED unless the operator supplies it —
+// same discipline as before, and for the sharpest possible reason here: an
+// unconfigured target must never silently fall back to a guess for a verb
+// that cuts real power. In practice, since the suspect box's host is now a
+// REQUIRED top-level config value, `wrongBoxTargetHost` is always populated
+// in any config that loads at all — a deliberate strengthening over the
+// old env loader, where it could be left unconfigured independently of
+// everything else (see src/config.ts's own comment).
 
-import { loadWedgeConfigFromEnv, positiveIntMs, type WedgeConfig, type WedgeConfigEnv } from "./wedge-config.ts";
-import { loadRecoveryConfigFromEnv, type RecoveryConfig, type RecoveryConfigEnv } from "./recovery-config.ts";
+import type { WedgeConfig } from "./wedge-config.ts";
+import type { RecoveryConfig } from "./recovery-config.ts";
 
 export interface CycleTimingConfig {
   /** How long to pause after the OFF attempt before starting the ON
@@ -68,7 +83,8 @@ export interface CycleConfig {
   readonly gate: WedgeConfig;
   readonly recovery: RecoveryConfig;
   /** The wrong-box guard's configured target host — see
-   * src/cycle-wrong-box.ts. No default. */
+   * src/cycle-wrong-box.ts. No default; always populated in any config
+   * loaded by src/config.ts (see this module's own top comment). */
   readonly wrongBoxTargetHost: string | undefined;
   /** The exact, operator-facing command printed in a STRANDED outcome —
    * see src/errors.ts's ExitCode.CycleStranded comment. Deliberately
@@ -79,57 +95,4 @@ export interface CycleConfig {
    * instead of inventing a placeholder. */
   readonly handRestoreCommand: string | undefined;
   readonly timing: CycleTimingConfig;
-}
-
-export interface CycleConfigEnv extends WedgeConfigEnv, RecoveryConfigEnv {
-  WYZR_CYCLE_WRONG_BOX_TARGET_HOST?: string | undefined;
-  WYZR_CYCLE_HAND_RESTORE_COMMAND?: string | undefined;
-  WYZR_CYCLE_OFF_TO_ON_WAIT_MS?: string | undefined;
-  WYZR_CYCLE_OFF_READBACK_POLL_INTERVAL_MS?: string | undefined;
-  WYZR_CYCLE_OFF_READBACK_BOUND_MS?: string | undefined;
-  WYZR_CYCLE_RESTORE_READBACK_POLL_INTERVAL_MS?: string | undefined;
-  WYZR_CYCLE_RESTORE_READBACK_BOUND_MS?: string | undefined;
-  WYZR_CYCLE_RESTORE_POLL_INTERVAL_MS?: string | undefined;
-  WYZR_CYCLE_RESTORE_TIMEOUT_MS?: string | undefined;
-}
-
-const systemEnv: Record<string, string | undefined> = process.env as unknown as Record<string, string | undefined>;
-
-function nonEmpty(value: string | undefined): string | undefined {
-  return value && value.trim().length > 0 ? value : undefined;
-}
-
-export function loadCycleConfigFromEnv(env: CycleConfigEnv = systemEnv): CycleConfig {
-  const gate = loadWedgeConfigFromEnv(env);
-  const recovery = loadRecoveryConfigFromEnv(env);
-
-  const timing: CycleTimingConfig = {
-    offToOnWaitMs: positiveIntMs(env.WYZR_CYCLE_OFF_TO_ON_WAIT_MS, DEFAULT_CYCLE_TIMING.offToOnWaitMs),
-    offReadbackPollIntervalMs: positiveIntMs(
-      env.WYZR_CYCLE_OFF_READBACK_POLL_INTERVAL_MS,
-      DEFAULT_CYCLE_TIMING.offReadbackPollIntervalMs,
-    ),
-    offReadbackBoundMs: positiveIntMs(env.WYZR_CYCLE_OFF_READBACK_BOUND_MS, DEFAULT_CYCLE_TIMING.offReadbackBoundMs),
-    restoreReadbackPollIntervalMs: positiveIntMs(
-      env.WYZR_CYCLE_RESTORE_READBACK_POLL_INTERVAL_MS,
-      DEFAULT_CYCLE_TIMING.restoreReadbackPollIntervalMs,
-    ),
-    restoreReadbackBoundMs: positiveIntMs(
-      env.WYZR_CYCLE_RESTORE_READBACK_BOUND_MS,
-      DEFAULT_CYCLE_TIMING.restoreReadbackBoundMs,
-    ),
-    restorePollIntervalMs: positiveIntMs(
-      env.WYZR_CYCLE_RESTORE_POLL_INTERVAL_MS,
-      DEFAULT_CYCLE_TIMING.restorePollIntervalMs,
-    ),
-    restoreTimeoutMs: positiveIntMs(env.WYZR_CYCLE_RESTORE_TIMEOUT_MS, DEFAULT_CYCLE_TIMING.restoreTimeoutMs),
-  };
-
-  return {
-    gate,
-    recovery,
-    wrongBoxTargetHost: nonEmpty(env.WYZR_CYCLE_WRONG_BOX_TARGET_HOST),
-    handRestoreCommand: nonEmpty(env.WYZR_CYCLE_HAND_RESTORE_COMMAND),
-    timing,
-  };
 }

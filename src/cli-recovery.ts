@@ -24,7 +24,8 @@ import { RealWedgeProbes } from "./wedge-probes-real.ts";
 import type { WedgeProbes } from "./wedge-probes.ts";
 import { RealRecoveryProbes } from "./recovery-probes-real.ts";
 import type { RecoveryProbes } from "./recovery-probes.ts";
-import { loadRecoveryConfigFromEnv, type RecoveryConfig } from "./recovery-config.ts";
+import type { RecoveryConfig } from "./recovery-config.ts";
+import { loadWyzrConfig } from "./config.ts";
 import { runRecoveryCheck } from "./recovery-runner.ts";
 import {
   RecoveryVerdict,
@@ -47,7 +48,7 @@ export interface RecoveryStatusDeps {
 }
 
 export const defaultRecoveryStatusDeps: RecoveryStatusDeps = {
-  loadConfig: () => loadRecoveryConfigFromEnv(),
+  loadConfig: () => loadWyzrConfig().recovery,
   createWedgeProbes: () => new RealWedgeProbes(),
   createRecoveryProbes: () => new RealRecoveryProbes(),
 };

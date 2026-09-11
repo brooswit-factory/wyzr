@@ -42,7 +42,8 @@ import { RealWedgeProbes } from "./wedge-probes-real.ts";
 import type { WedgeProbes } from "./wedge-probes.ts";
 import { RealRecoveryProbes } from "./recovery-probes-real.ts";
 import type { RecoveryProbes } from "./recovery-probes.ts";
-import { loadCycleConfigFromEnv, type CycleConfig } from "./cycle-config.ts";
+import type { CycleConfig } from "./cycle-config.ts";
+import { loadWyzrConfig } from "./config.ts";
 import { RealCyclePlugTransport, type PlugWriter } from "./cycle-plug.ts";
 import { RealWrongBoxIdentityProbe, type WrongBoxIdentityProbe } from "./cycle-wrong-box.ts";
 import { RealCycleClock, type CycleClock } from "./cycle-clock.ts";
@@ -92,7 +93,7 @@ export interface CycleCommandDeps {
 export const defaultCycleCommandDeps: CycleCommandDeps = {
   loadCredentials,
   createTransport: () => new RealWyzeTransport(),
-  loadConfig: () => loadCycleConfigFromEnv(),
+  loadConfig: () => loadWyzrConfig().cycle,
   createGateProbes: () => new RealWedgeProbes(),
   createRecoveryWedgeProbes: () => new RealWedgeProbes(),
   createRecoveryProbes: () => new RealRecoveryProbes(),
@@ -182,8 +183,15 @@ async function resolveForced(
 
   const target = config.wrongBoxTargetHost;
   if (!target) {
+    // WYZR-20/WYZR-28: unreachable in practice — `suspectBox.host` (the
+    // source of `wrongBoxTargetHost`) is a REQUIRED value in any config
+    // src/config.ts's loadWyzrConfig() actually returns, so this branch
+    // cannot be reached through the real CLI. Kept because the TYPE still
+    // allows `undefined` (a test can hand this function a hand-built
+    // CycleConfig with it unset), and a defensive Usage error naming the
+    // real config key beats a silent confirmation with nothing to confirm.
     throw new CliError(
-      `Usage: ${FORCE_FLAG} requires WYZR_CYCLE_WRONG_BOX_TARGET_HOST to be configured, so the confirmation can ` +
+      `Usage: ${FORCE_FLAG} requires "suspectBox.host" to be configured in config.json, so the confirmation can ` +
         "name the target.",
       ExitCode.Usage,
     );

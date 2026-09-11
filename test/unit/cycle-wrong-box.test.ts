@@ -140,6 +140,27 @@ describe("evaluateWrongBoxGuard (pure core) — inconclusive: every case where e
     expect(result.outcome).toBe("inconclusive");
     expect(result.reasons.join(" ")).toContain("could not enumerate");
   });
+
+  // WYZR-28: the EMPTY-SET HOLE. Before the fix below, an empty
+  // (non-null) `targetAddresses` array fell straight through the
+  // `targetAddresses === null` check, reached the final branch, and
+  // returned "not_target" — CLEARING VACUOUSLY on a verb that cuts mains
+  // power (an empty set trivially "overlaps nothing"). Watched fail
+  // first: run against the code as it stood before this test was added,
+  // this exact call returned `{ outcome: "not_target" }`, captured
+  // verbatim in the PR body. It is unreachable through shipped code today
+  // (`RealWrongBoxIdentityProbe.resolveTargetAddresses()` converts an
+  // empty resolver result to `null` in exactly one place — pinned by its
+  // own "returns null ... when the injected resolver resolves to zero
+  // addresses" test above), which is exactly why the previous story's
+  // epic carried it forward rather than bouncing a fifth round instead of
+  // fixing it there.
+  test("named test 10 (WYZR-28): an EMPTY (non-null) resolved-address set -> inconclusive, REFUSES — never not_target", () => {
+    const result = evaluateWrongBoxGuard("some-target", [], ["192.0.2.10"]);
+    expect(result.outcome).not.toBe("not_target");
+    expect(result.outcome).toBe("inconclusive");
+    expect(result.reasons.join(" ")).toContain("resolved an EMPTY");
+  });
 });
 
 describe(

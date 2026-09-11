@@ -56,6 +56,7 @@ describe("ExitCode", () => {
       ExitCode.CycleFleetHalfRestored,
       ExitCode.CycleRecoveryInconclusive,
       ExitCode.CycleRecoveryUnconfigured,
+      ExitCode.ConfigInvalid,
     ];
     expect(new Set(codes).size).toBe(codes.length);
   });
@@ -148,6 +149,44 @@ describe("ExitCode", () => {
     expect(ExitCode.CycleFleetHalfRestored).toBe(23);
     expect(ExitCode.CycleRecoveryInconclusive).toBe(24);
     expect(ExitCode.CycleRecoveryUnconfigured).toBe(25);
+  });
+
+  // WYZR-28 decision: append-only continues — 0-25 must never move.
+  // Verified by reading this repo's highest existing code (25, WYZR-27's)
+  // before appending, per the ticket's explicit instruction to verify
+  // rather than trust a number relayed in the ticket text.
+  test("0-25 are untouched by WYZR-28's additions", () => {
+    expect(ExitCode.Ok).toBe(0);
+    expect(ExitCode.Generic).toBe(1);
+    expect(ExitCode.Usage).toBe(2);
+    expect(ExitCode.CredentialsInvalid).toBe(3);
+    expect(ExitCode.NotFound).toBe(4);
+    expect(ExitCode.Network).toBe(5);
+    expect(ExitCode.ApiError).toBe(6);
+    expect(ExitCode.MfaRequired).toBe(7);
+    expect(ExitCode.AmbiguousDevice).toBe(8);
+    expect(ExitCode.StateUnknown).toBe(9);
+    expect(ExitCode.WriteContradicted).toBe(10);
+    expect(ExitCode.WedgeNotProven).toBe(11);
+    expect(ExitCode.WedgeInconclusiveBySharedCause).toBe(12);
+    expect(ExitCode.RecoveryNotRecovered).toBe(13);
+    expect(ExitCode.RecoveryFleetHalfRestored).toBe(14);
+    expect(ExitCode.RecoveryInconclusive).toBe(15);
+    expect(ExitCode.RecoveryUnconfigured).toBe(16);
+    expect(ExitCode.CycleRefusedByGate).toBe(17);
+    expect(ExitCode.CycleRefusedByWrongBoxGuard).toBe(18);
+    expect(ExitCode.CycleRefusedByPrecondition).toBe(19);
+    expect(ExitCode.CycleDryRunWouldAct).toBe(20);
+    expect(ExitCode.CycleStranded).toBe(21);
+    expect(ExitCode.CycleNotRecovered).toBe(22);
+    expect(ExitCode.CycleFleetHalfRestored).toBe(23);
+    expect(ExitCode.CycleRecoveryInconclusive).toBe(24);
+    expect(ExitCode.CycleRecoveryUnconfigured).toBe(25);
+  });
+
+  test("WYZR-28 appends 26 as config_invalid — the single configuration surface's one refusal code", () => {
+    expect(ExitCode.ConfigInvalid).toBe(26);
+    expect(ExitCodeName[ExitCode.ConfigInvalid]).toBe("config_invalid");
   });
 });
 

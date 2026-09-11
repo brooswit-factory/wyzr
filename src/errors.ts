@@ -137,6 +137,21 @@ export const ExitCode = {
    * checks nobody pointed anywhere. Same reasoning as
    * ExitCode.RecoveryUnconfigured; its own code for the same reason. */
   CycleRecoveryUnconfigured: 25,
+  /** The single configuration surface (WYZR-20/WYZR-28), `src/config.ts`'s
+   * `loadWyzrConfig()`: the config file at `<config base>/wyzr/config.json`
+   * is missing, unreadable (over-permissive directory or file mode),
+   * unparseable, malformed (wrong shape), missing a required value, has a
+   * present-but-incomplete optional section, or configures the fleet plug
+   * and the safe plug as the same device. ONE code for all of these,
+   * mirroring `ExitCode.CredentialsInvalid`'s own precedent exactly: a
+   * caller distinguishing "missing file" from "bad permissions" from
+   * "incomplete section" needs the `reason` string either way (there is no
+   * exit-code-level action a script would take differently between them),
+   * so this does not fragment into several new codes for the first
+   * config-consuming ticket — see `src/config.ts`'s own `reason` strings
+   * (e.g. `config_missing`, `config_file_mode`, `config_field_missing`,
+   * `config_plug_conflation`) for the finer-grained detail. */
+  ConfigInvalid: 26,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -172,6 +187,7 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.CycleFleetHalfRestored]: "cycle_fleet_half_restored",
   [ExitCode.CycleRecoveryInconclusive]: "cycle_recovery_inconclusive",
   [ExitCode.CycleRecoveryUnconfigured]: "cycle_recovery_unconfigured",
+  [ExitCode.ConfigInvalid]: "config_invalid",
 };
 
 export class CliError extends Error {

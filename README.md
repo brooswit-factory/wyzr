@@ -95,7 +95,7 @@ stories — the numbers already assigned here never change or get reused.
 | 13   | `recovery_not_recovered` | `wyzr recovery status` only: the verdict was NOT_RECOVERED — the box affirmatively did not come back, affirmatively did not reboot, or some other check affirmatively failed. See "`wyzr recovery status`" below. |
 | 14   | `recovery_fleet_half_restored` | `wyzr recovery status` only: the box itself is affirmatively back and rebooted, but the fleet came back with bare (un-flagged) agent processes present — the herdr-restore trap. wyzr detects and reports this; it does not fix it. |
 | 15   | `recovery_inconclusive` | `wyzr recovery status` only: something load-bearing was looked at and could not be read, and nothing affirmatively failed — possible evidence about the box. Distinct from 16 so a script can tell "could not look" from "never configured." |
-| 16   | `recovery_unconfigured` | `wyzr recovery status` only: nothing failed and nothing was unreadable — the only gaps are checks nobody ever pointed anywhere. This is the NORMAL state until WYZR-20 ships. |
+| 16   | `recovery_unconfigured` | `wyzr recovery status` only: nothing failed and nothing was unreadable — the only gaps are checks nobody ever pointed anywhere (an operator-fixable setup gap: an optional section — e.g. `recovery.daemon` — was left out of `config.json`). |
 | 17   | `cycle_refused_by_gate` | `wyzr cycle` only: the wedge gate's verdict was NOT_PROVEN or INCONCLUSIVE_BY_SHARED_CAUSE and nothing overrode it. Produced whether or not `--dry-run` was passed — see "`wyzr cycle`" below. |
 | 18   | `cycle_refused_by_wrong_box_guard` | `wyzr cycle` only: the wrong-box guard refused — either it affirmatively established this machine IS the configured target, or it could not affirmatively establish that it is not. Runs on every path, including `--force` and `--dry-run` — no escape hatch. |
 | 19   | `cycle_refused_by_precondition` | `wyzr cycle` only: refused by the before-the-cut precondition (cloud unreachable, or the plug's P3/P5 not both readable) — the CAPABILITY `--force` can never override. |
@@ -105,21 +105,25 @@ stories — the numbers already assigned here never change or get reused.
 | 23   | `cycle_fleet_half_restored` | `wyzr cycle` only: the composed recovery verdict was FLEET_HALF_RESTORED. Its own code rather than reusing 14 — see "`wyzr cycle`" below for why. |
 | 24   | `cycle_recovery_inconclusive` | `wyzr cycle` only: the composed recovery verdict was INCONCLUSIVE. |
 | 25   | `cycle_recovery_unconfigured` | `wyzr cycle` only: the composed recovery verdict was UNCONFIGURED. |
+| 26   | `config_invalid` | The single configuration surface (`src/config.ts`'s `loadWyzrConfig()`, WYZR-20/WYZR-28): the config file is missing, unreadable (over-permissive directory or file mode), unparseable, has an unknown/missing/mistyped field, has a present-but-incomplete optional section, or configures the fleet plug and the safe plug as the same device. ONE code for all of these — see "Configuration" under `wyzr wedge status` below for why, mirroring `credentials_invalid`'s own precedent; `CliError.reason` carries the finer detail (`config_missing`, `config_file_mode`, `config_field_missing`, `config_plug_conflation`, ...). |
 
 Codes 8/9/10 were added by `wyzr plug status|on|off` (WYZR-13); 11/12 were
 added by `wyzr wedge status` (WYZR-17); 13/14/15/16 were added by `wyzr
 recovery status` (WYZR-25); 17-25 were added by `wyzr cycle` (WYZR-19/
-WYZR-27) — all appending only, never renumbering or reusing an existing
-code. 0–7 are unchanged from earlier stories. `wyzr cycle`'s own success
-(cycled and recovered) reuses exit `0`, by symmetry with `recovery
-status`'s RECOVERED.
+WYZR-27); 26 was added by the config file (WYZR-20/WYZR-28) — all
+appending only, never renumbering or reusing an existing code. 0–7 are
+unchanged from earlier stories. `wyzr cycle`'s own success (cycled and
+recovered) reuses exit `0`, by symmetry with `recovery status`'s RECOVERED.
 
 ### Two classes of non-zero exit code
 
-**Codes `2`/`3`/`4`/`5`/`6`/`8` are ERROR codes.** Something kept the
-command from doing its job at all. These are thrown as a `CliError`,
-handled by `src/cli.ts`'s single error boundary, and printed under
-`--json` as the `{"error": {...}}` envelope below, on stderr.
+**Codes `2`/`3`/`4`/`5`/`6`/`8`/`26` are ERROR codes.** Something kept the
+command from doing its job at all — `26` (`config_invalid`) joins this
+class rather than the OUTCOME classes below: an invalid config means no
+probe ever ran, exactly like an invalid credentials file (`3`). These are
+thrown as a `CliError`, handled by `src/cli.ts`'s single error boundary,
+and printed under `--json` as the `{"error": {...}}` envelope below, on
+stderr.
 
 **Codes `9`/`10` are OUTCOME codes, not error codes.** The command
 *succeeded* at doing its job — it wrote (for `plug on`/`off`) or read (for
@@ -260,7 +264,11 @@ zero network.
 ### File location
 
 `$XDG_CONFIG_HOME/wyzr/credentials.json` when `XDG_CONFIG_HOME` is set and
-non-empty, else `$HOME/.config/wyzr/credentials.json`.
+non-empty, else `$HOME/.config/wyzr/credentials.json`. The same directory
+(`wyzrConfigDir()`, exported from this module and reused rather than
+reimplemented) also holds `config.json` — the single configuration
+surface for everything that is NOT a secret credential; see `wyzr cycle`'s
+own "Configuration" section below for its full schema.
 
 ### File shape
 
@@ -1500,8 +1508,9 @@ boundary and these probes rather than writing its own:**
   `classifyDirectPath()` pure classifier.
 
 **Internal, free to change:** `src/cli-wedge.ts` (formatting/JSON
-projection), `src/wedge-config.ts`'s env-var loader (explicitly
-provisional — see "Configuration" below), and every unexported helper in
+projection), `src/config.ts`'s loader internals (its own helper functions —
+see "Configuration" below for the loader's own documented contract, which
+is NOT free to change casually), and every unexported helper in
 `src/wedge-runner.ts` (`attempt()`, the `toXObservation()` functions).
 
 ### Configuration
@@ -1509,26 +1518,43 @@ provisional — see "Configuration" below), and every unexported helper in
 **No fleet hostname, tunnel name, or credential is hardcoded anywhere in
 this repo.** This repo is public; epic WYZR-1 deliberately kept fleet
 hostnames out of it, which this task keeps doing. Every host-specific
-value is injectable; **WYZR-20 (a later, already-filed story) owns the
-real config file and install** — the loader below is this task's own
-honest, provisional stand-in, not that story's design being settled.
+value is injectable, through the ONE configuration surface described here
+and shared by `wyzr wedge status`, `wyzr recovery status`, and `wyzr
+cycle` alike — see `wyzr cycle`'s own "Configuration" section below for
+the full schema; this subsection covers only the fields THIS command
+reads.
 
-`src/wedge-config.ts`'s `loadWedgeConfigFromEnv()` reads:
+**WYZR-20/WYZR-28: the CLI now reads a real, file-backed config —
+`src/config.ts`'s `loadWyzrConfig()` — never an environment variable.**
+The file lives at `<XDG_CONFIG_HOME or $HOME/.config>/wyzr/config.json`,
+resolved by the exact same rule `src/credentials.ts` already uses for
+`credentials.json`. A missing file, an over-permissive directory or file
+(`mode & 0o077`), unparseable JSON, a missing required value, or a
+present-but-incomplete optional section are all REFUSALS — never a
+silent default, never a partial load. `docs/config.example.json` is a
+complete, placeholder-only, genuinely-loadable example of every required
+and optional key (a test asserts it actually loads).
 
-| Env var | Configures |
+This command reads:
+
+| Config key | Configures |
 | --- | --- |
-| `WYZR_WEDGE_JIRA_BASE_URL` + `WYZR_WEDGE_JIRA_AUTH_HEADER` (both required together) | Jira-activity. `WYZR_WEDGE_JIRA_PROJECT_KEY` narrows the query; `WYZR_WEDGE_JIRA_QUIET_THRESHOLD_MS`/`WYZR_WEDGE_JIRA_TIMEOUT_MS` override the defaults. |
-| `WYZR_WEDGE_GITHUB_OWNER` | GitHub-activity. `WYZR_WEDGE_GITHUB_REPO` scopes to one repo (org-wide otherwise); `WYZR_WEDGE_GITHUB_TOKEN` is optional (unauthenticated works for public targets, at a lower rate limit — see below). |
-| `WYZR_WEDGE_SSH_HOST` | The ssh direct path. |
-| `WYZR_WEDGE_TUNNEL_PING_HOST` | The tunnel-ping direct path. |
-| `WYZR_WEDGE_LOCAL_CONNECTIVITY_TARGET` | Overrides the local-connectivity control's default target (`1.1.1.1`) — the one field that already has a safe default. |
-| `WYZR_WEDGE_CONTROL_PLANE_NAME` | Presence alone opts the control-plane reading in (its value is only ever used as a label). |
+| `suspectBox.host` (**required**) | The ssh direct path's target. The SAME value also feeds `wyzr cycle`'s wrong-box guard and `wyzr recovery status`'s reused-host probes — see `wyzr cycle`'s own "Configuration" section for why this is deliberately ONE field, never two that could disagree. `suspectBox.timeoutMs`/`.connectTimeoutMs` default to `5000`/`3000`. |
+| `jira` (optional section: `baseUrl` + `authHeader` required together if present) | Jira-activity. `projectKey` narrows the query; `quietThresholdMs`/`timeoutMs` default to `600000`/`5000`. |
+| `github` (optional section: `owner` required if present) | GitHub-activity. `repo` scopes to one repo (org-wide otherwise); `token` is optional (unauthenticated works for public targets, at a lower rate limit — see below); `quietThresholdMs`/`timeoutMs` default to `600000`/`5000`. |
+| `tunnelPing` (optional section: `host` required if present) | The tunnel-ping direct path. `timeoutMs`/`connectTimeoutMs` default to `5000`/`3000`. |
+| `localConnectivity` (optional — every field defaults) | Overrides the local-connectivity control's default target (`1.1.1.1`) and/or timeout (`5000`) — the one instrument that already has a safe default, so the whole section may be omitted. |
+| `controlPlane` (optional section: `name` required if present) | Opts the control-plane reading in; `timeoutMs` defaults to `5000`. |
 
-Every field above defaults to **unconfigured** when its env var is
-absent — never a guess. **This is the NORMAL state until WYZR-20 ships,**
-which is exactly why "unconfigured never counts toward a quorum" (see
-"The instruments" above) is load-bearing rather than tidy: it is the
-state this code will actually be in the first time anyone runs it.
+Every section marked "optional" above may be omitted entirely — that
+instrument then reports itself **UNCONFIGURED**, exactly as it did under
+the old provisional env-var loader ("an unconfigured instrument must
+count toward a quorum" — see "The instruments" above — must and does
+survive this rewrite). **But a section that IS present must be
+COMPLETE:** e.g. a present `jira` section missing `authHeader` is a
+REFUSAL naming `jira.authHeader`, never a partial load that leaves
+Jira-activity quietly half-configured. `suspectBox.host` has no such
+escape — it is required in every config that loads at all.
 
 ### The `--json` contract
 
@@ -1984,11 +2010,13 @@ prose:
 "You never told me where to look" is an operator-fixable setup gap; "I
 looked and could not see" is possible evidence about the box. Different
 epistemic states. **What makes it urgent rather than tidy: UNCONFIGURED is
-the NORMAL state until WYZR-20 ships.** Collapsing the two means EVERY run
-returns the same verdict, forever, until a story that has not started yet
-lands — and a verdict that never varies teaches an operator to stop reading
-it, so the one meaning "the box is gone" would arrive looking identical to
-the two hundred meaning "you have not written a config file."
+the NORMAL state for any optional section (daemon, fleet-audit, Jira,
+GitHub, ...) an operator has simply chosen not to fill in.** Collapsing
+the two means EVERY run with an optional section left out returns the
+same verdict as a genuine "could not read it" — and a verdict that never
+varies teaches an operator to stop reading it, so the one meaning "the box
+is gone" would arrive looking identical to the two hundred meaning "you
+left a section out of `config.json`."
 
 **Precedence, in this exact order, each with the reasoning that justifies
 it** (`src/recovery.ts`'s `evaluateRecovery()` own comment states the same
@@ -2052,37 +2080,46 @@ WYZR-19. `src/recovery-runner.ts`'s `runRecoveryCheck()` takes BOTH a
 separate `RecoveryProbes` (`src/recovery-probes.ts` — the three genuinely
 new probes: uptime, daemon, fleet-audit). Composition over widening.
 
-### Config reuse, and the one host var this story does NOT introduce
+### Config reuse, and the one host field this story does NOT introduce
 
-`src/recovery-config.ts`'s `loadRecoveryConfigFromEnv()` does not re-declare
-env vars for anything WYZR-16 already owns: the SAME `WYZR_WEDGE_*` env vars
-(`WYZR_WEDGE_JIRA_*`, `WYZR_WEDGE_GITHUB_*`, `WYZR_WEDGE_SSH_HOST`,
-`WYZR_WEDGE_TUNNEL_PING_HOST`, `WYZR_WEDGE_LOCAL_CONNECTIVITY_TARGET`)
-configure both `wyzr wedge status` and `wyzr recovery status`, because both
-probe the same suspect box from the same manager-box vantage point.
+**WYZR-20/WYZR-28: this command now reads the same file-backed
+`src/config.ts`'s `loadWyzrConfig()` every other command reads — see `wyzr
+wedge status`'s own "Configuration" section above for the loader's shared
+discipline (missing/unparseable/incomplete-section refusals, permission
+checks, `docs/config.example.json`).** It does not re-declare config keys
+for anything `wyzr wedge status` already owns: the SAME `jira`, `github`,
+`tunnelPing`, and `localConnectivity` sections, and the SAME
+`suspectBox.host`, configure both commands, because both probe the same
+suspect box from the same manager-box vantage point.
 
-**Design decision this ticket left open, resolved here: the three new
-probes do NOT get their own `--host`.** They reuse `WYZR_WEDGE_SSH_HOST` as
-their target — the same suspect box WYZR-16's ssh direct path already
-points at. A second host var would let an operator misconfigure the two to
-point at different boxes with no error, and there is no legitimate reason
-for them to differ. Consequence: if `WYZR_WEDGE_SSH_HOST` is unset, the
-uptime/daemon/fleet probes are unconfigured too, regardless of their own
-env vars.
+**Design decision this ticket left open, resolved here (and preserved
+verbatim through the WYZR-28 rewrite): the three new probes do NOT get
+their own host field.** They reuse `suspectBox.host` as their target — the
+same suspect box the ssh direct path already points at. A second host
+field would let an operator misconfigure the two to point at different
+boxes with no error, and there is no legitimate reason for them to differ.
+Consequence, STRENGTHENED by this rewrite: since `suspectBox.host` is now
+a REQUIRED top-level value (rather than an independently-optional env
+var), the uptime probe is **always** configured in any config that loads
+at all — unlike the old env-var loader, where it could be left
+unconfigured by leaving ssh unset. The daemon and fleet-audit checks still
+independently gate on their own required-together pairs below, unchanged.
 
-| Env var | Configures |
+| Config key | Configures |
 | --- | --- |
-| `WYZR_WEDGE_JIRA_*`, `WYZR_WEDGE_GITHUB_*` | Outside-instrument resumption (check 4) — same vars as `wyzr wedge status`. |
-| `WYZR_WEDGE_SSH_HOST` | Reachability's ssh path (check 1) AND, by reuse, the target host for the reboot/daemon/fleet probes (checks 2/3/5). |
-| `WYZR_WEDGE_TUNNEL_PING_HOST` | Reachability's tunnel-ping path (check 1). |
-| `WYZR_WEDGE_LOCAL_CONNECTIVITY_TARGET` | The shared-cause exclusion's target — same default (`1.1.1.1`) as `wyzr wedge status`. |
-| `WYZR_RECOVERY_UPTIME_TIMEOUT_MS` | Overrides the uptime probe's timeout — defaults to the reused ssh config's own `timeoutMs`. |
-| `WYZR_RECOVERY_DAEMON_UNIT` + `WYZR_RECOVERY_DAEMON_SCOPE` (`"user"` or `"system"`, both required together) | The daemon check (check 3). `WYZR_RECOVERY_DAEMON_TIMEOUT_MS` overrides its timeout. |
-| `WYZR_RECOVERY_FLEET_PROCESS_MATCH` + `WYZR_RECOVERY_FLEET_EXPECTED_FLAGS` (comma-separated, both required together) | The fleet-pane audit (check 5). `WYZR_RECOVERY_FLEET_TIMEOUT_MS` overrides its timeout. |
+| `jira`, `github` | Outside-instrument resumption (check 4) — same sections as `wyzr wedge status`. |
+| `suspectBox.host` | Reachability's ssh path (check 1) AND, by reuse, the target host for the reboot/daemon/fleet probes (checks 2/3/5). |
+| `tunnelPing` | Reachability's tunnel-ping path (check 1). |
+| `localConnectivity` | The shared-cause exclusion's target — same default (`1.1.1.1`) as `wyzr wedge status`. |
+| `recovery.uptimeTimeoutMs` (optional) | Overrides the uptime probe's timeout — defaults to the reused `suspectBox.timeoutMs`. |
+| `recovery.daemon` (optional section: `unit` + `scope` required together if present, `scope` must be exactly `"user"` or `"system"`) | The daemon check (check 3). `timeoutMs` defaults to `5000`. **A typo'd `scope` REFUSES, naming the value — it does not silently vanish into "unconfigured"**, unlike the old env-var loader (a deliberate, documented strengthening — see `src/config.ts`'s own top comment). |
+| `recovery.fleetAudit` (optional section: `processMatch` + `expectedFlags` required together if present) | The fleet-pane audit (check 5). `timeoutMs` defaults to `5000`. |
 
-Every field above defaults to **unconfigured** unless the operator supplies
-it — never a guess, same discipline as `wyzr wedge status`, and for the same
-reason: this is the NORMAL state until WYZR-20 ships.
+Every optional section above may be omitted entirely — that check then
+reports itself **UNCONFIGURED**, never a guess, same discipline as `wyzr
+wedge status`. A section that IS present must be COMPLETE (e.g. `recovery.daemon`
+with `unit` but no `scope` is a refusal naming `recovery.daemon.scope`,
+never a half-configured daemon check).
 
 ### The `--json` contract
 
@@ -2299,7 +2336,7 @@ fallback to a real timer). If the restore cannot be confirmed within the
 configured bound, `wyzr cycle` exits on its own distinct code (`21`,
 `cycle_stranded`) whose message states plainly: power is OFF, the restore
 was NOT confirmed, and the exact single command that restores it by hand
-(from `WYZR_CYCLE_HAND_RESTORE_COMMAND` — configured, never invented). This
+(from `cycle.handRestoreCommand` — configured, never invented). This
 is the loudest thing in the product, and it is NEVER reported as success.
 
 **Why the OFF write is at most once, ever, while the ON may be retried
@@ -2420,11 +2457,12 @@ configuration, which requires the target to have a stable address on
 record, never that it be reachable or powered on right now.
 
 **Operational requirement this places on deployment, stated here rather
-than assumed:** the configured target
-(`WYZR_CYCLE_WRONG_BOX_TARGET_HOST`, no default, same discipline as every
-other fleet-specific field in this repo) must resolve, from the machine
-`wyzr cycle` runs on, to that target's real address(es) — via DNS or a
-static `/etc/hosts` entry — independent of whether the target is currently
+than assumed:** the configured target (`suspectBox.host` — REQUIRED, no
+default; also the wrong-box guard's own target, deliberately the SAME
+field as the ssh direct path's, see "Configuration" below) must resolve,
+from the machine `wyzr cycle` runs on, to that target's real address(es)
+— via DNS or a static `/etc/hosts` entry — independent of whether the
+target is currently
 up.
 
 **What this still cannot detect, and does not claim to:** multi-homed or
@@ -2589,30 +2627,121 @@ the engines themselves. Top-level shape:
 
 ### Configuration
 
-No default for anything that would name a fleet host, plug, or device — the
-target plug is CLI-resolved (`<device>`, like `plug status|on|off`), never
-hard-coded and never guessed. `src/cycle-config.ts`'s
-`loadCycleConfigFromEnv()` composes `src/wedge-config.ts`'s
-`loadWedgeConfigFromEnv()` (the gate's own inputs — the SAME `WYZR_WEDGE_*`
-vars configure the gate here as configure `wyzr wedge status`) and
-`src/recovery-config.ts`'s `loadRecoveryConfigFromEnv()` (the post-cycle
-verifier's own inputs, including its own ssh-host-reuse rule) — composed,
-not duplicated.
+**WYZR-20/WYZR-28: the ONE file-backed configuration surface, read by
+`wyzr wedge status`, `wyzr recovery status`, and `wyzr cycle` alike.**
+`src/config.ts`'s `loadWyzrConfig()` loads, validates, and returns the
+whole thing from `<XDG_CONFIG_HOME or $HOME/.config>/wyzr/config.json` —
+the SAME XDG rule `src/credentials.ts` uses for `credentials.json`, reused
+rather than reimplemented. The CLI reads **nothing** from the environment
+for configuration; the previous provisional `WYZR_WEDGE_*`/`WYZR_RECOVERY_*`/
+`WYZR_CYCLE_*` env-var loaders are gone. A dedicated test
+(`test/unit/config.test.ts`, "no `WYZR_*` environment variable influences
+the loaded config") sets a plausible env var, loads a config from a
+fixture file, and asserts the env value never appears in the result.
 
-| Env var | Meaning | Default |
-| --- | --- | --- |
-| `WYZR_CYCLE_WRONG_BOX_TARGET_HOST` | The wrong-box guard's configured target — see above. | none (unconfigured -> the guard is inconclusive -> refuses) |
-| `WYZR_CYCLE_HAND_RESTORE_COMMAND` | The exact, operator-facing command printed on a STRANDED outcome. | none (the message says so plainly instead of inventing a placeholder) |
-| `WYZR_CYCLE_OFF_TO_ON_WAIT_MS` | Pause between the OFF attempt and starting the restore. | 5000 |
-| `WYZR_CYCLE_OFF_READBACK_POLL_INTERVAL_MS` / `WYZR_CYCLE_OFF_READBACK_BOUND_MS` | The OFF read-back's own bounded retry (R3) — purely evidentiary; the restore always runs regardless of what this concludes (R2). | 2000 / 20000 |
-| `WYZR_CYCLE_RESTORE_READBACK_POLL_INTERVAL_MS` / `WYZR_CYCLE_RESTORE_READBACK_BOUND_MS` | Each ON attempt's own bounded read-back retry. | 2000 / 20000 |
-| `WYZR_CYCLE_RESTORE_POLL_INTERVAL_MS` | Delay between successive ON write attempts in the never-give-up loop. | 10000 |
-| `WYZR_CYCLE_RESTORE_TIMEOUT_MS` | The OUTER bound on the whole never-give-up restore — past this, STRANDED. | 300000 (5 minutes) |
+**Why one surface, not two, ratified explicitly for this ticket:** the old
+env loaders let `wedge-config` (which box is wedged) and `cycle-config`
+(which plug to cut) disagree with no error — the worst outcome this
+product can produce is proving box A is wedged and cutting power to box
+B. A single validated file removes that possibility structurally, not by
+operator discipline.
 
-**None of the timing defaults above is derived from the ticket's own n=1
+**Refusal discipline (the loader's own contract, mirroring
+`src/credentials.ts` exactly):** a missing config file, an over-permissive
+directory or file (`mode & 0o077`, checked directory-then-file), unparseable
+JSON, an unknown top-level field, a missing/mistyped required value, or a
+present-but-incomplete optional section are ALL refusals — one exit code,
+`ExitCode.ConfigInvalid` (26), distinguished by a `reason` string (same
+precedent as `ExitCode.CredentialsInvalid`). **No error path this loader
+produces ever echoes a config value, a hostname, a mac, or a secret
+fragment** — every message names only a field/section path and the config
+file's own path. `docs/config.example.json` is a complete, placeholder-only,
+genuinely-loadable example of every required key and every optional
+section (a test loads it directly, guarding against the example drifting
+out of sync with the schema); `.gitignore` makes an accidental
+`/config.json` in the repo root impossible to commit.
+
+**The full schema:**
+
+| Config key | Required? | Meaning | Default when omitted |
+| --- | --- | --- | --- |
+| `suspectBox.host` | **Required** | The suspect box's ssh direct path target — see `wyzr wedge status`'s own "Configuration" section. **Also the wrong-box guard's configured target, and the reused host for the reboot/daemon/fleet probes** — deliberately ONE field, not three, so they can never diverge (see below). Must RESOLVE from the machine `wyzr` runs on (DNS or a static hosts entry), independently of whether the target is powered on — a real deployment constraint, not a suggestion (see "The wrong-box guard" above). | none — required |
+| `suspectBox.timeoutMs` / `.connectTimeoutMs` | optional | The ssh probe's own budget / connect-timeout. | 5000 / 3000 |
+| `tunnelPing` (section) | optional | The tunnel-ping direct path — see `wyzr wedge status`. | unconfigured |
+| `jira` / `github` (sections) | optional | Outside-instrument resumption — see `wyzr wedge status`. | unconfigured |
+| `localConnectivity` (section) | optional | The shared-cause exclusion's target/timeout. | target `1.1.1.1`, timeout `5000` |
+| `controlPlane` (section) | optional | The control-plane reading — see `wyzr wedge status`. | unconfigured |
+| `recovery.uptimeTimeoutMs` | optional | Overrides the reused uptime probe's timeout. | `suspectBox.timeoutMs` |
+| `recovery.daemon` (section) | optional | The daemon check — see `wyzr recovery status`. `scope` must be exactly `"user"` or `"system"` when present; a typo REFUSES rather than vanishing. | unconfigured |
+| `recovery.fleetAudit` (section) | optional | The fleet-pane audit — see `wyzr recovery status`. | unconfigured |
+| `cycle.handRestoreCommand` | optional | The exact, operator-facing command printed on a STRANDED outcome. | none — the message says so plainly instead of inventing a placeholder |
+| `cycle.timing.offToOnWaitMs` | optional | Pause between the OFF attempt and starting the restore. | 5000 |
+| `cycle.timing.offReadbackPollIntervalMs` / `.offReadbackBoundMs` | optional | The OFF read-back's own bounded retry (R3) — purely evidentiary; the restore always runs regardless of what this concludes (R2). | 2000 / 20000 |
+| `cycle.timing.restoreReadbackPollIntervalMs` / `.restoreReadbackBoundMs` | optional | Each ON attempt's own bounded read-back retry. | 2000 / 20000 |
+| `cycle.timing.restorePollIntervalMs` | optional | Delay between successive ON write attempts in the never-give-up loop. | 10000 |
+| `cycle.timing.restoreTimeoutMs` | optional | The OUTER bound on the whole never-give-up restore — past this, STRANDED. | 300000 (5 minutes) |
+| `fleetPlug` (`mac` + `model` + `name`, `subDeviceId` optional) | **Required** | The plug on the cord of the box the whole fleet runs on. | none — required |
+| `safePlug` (same shape) | **Required** | A deliberately-chosen, DIFFERENT plug a later task will rehearse a real write against. | none — required |
+
+**Defaults are permitted ONLY for the fields marked above: timeouts,
+quiet thresholds, the local-connectivity target, and the cycle timing
+bounds.** None of the timing defaults is derived from the ticket's own n=1
 propagation measurement (~3 seconds, one plug, one network, by hand) — R3
-is explicit that this is not a latency budget.** They are plain, round,
-operator-tunable starting points, stated here as exactly that.
+is explicit that this is not a latency budget. They are plain, round,
+operator-tunable starting points, stated here as exactly that. **A
+malformed but PRESENT value in any of these fields REFUSES — it does NOT
+silently fall back to the default**, e.g. `suspectBox.timeoutMs: "abc"` or
+`cycle.timing.restoreTimeoutMs: -5` both refuse naming the field. Only a
+genuinely ABSENT field gets the documented default. (This is a deliberate
+strengthening over the removed env-var loaders' `positiveIntMs()`, which
+fell back to the default for a malformed value too — defensible for a
+string-only env var, not for a validated JSON file; see `src/config.ts`'s
+own top comment for the full reasoning.)
+
+**Secrets vs. identifiers.** `jira.authHeader` and `github.token` are
+registered with the redaction registry (`src/redact.ts`) before the loader
+returns, exactly like `src/credentials.ts`. Hostnames, mac addresses, and
+plug names are deliberately NEVER registered — they must stay legible in
+the diagnostics an operator reads on their own screen during an outage; a
+mistaken refusal with its addresses scrubbed would be undiagnosable.
+
+### The fleet plug and the safe plug — structurally impossible to conflate
+
+**A write rehearsal (a later task) pointed at the fleet plug is the worst
+outcome this story could produce.** `fleetPlug` and `safePlug` are not
+merely two same-shaped config sections: `src/config.ts` brands them as
+`FleetPlugTarget` and `SafePlugTarget`, two structurally unrelated
+TypeScript types, using the exact same technique
+`src/cycle-preconditions.ts`'s `PreconditionsClearedWitness` already
+established in this repo — a MODULE-PRIVATE `unique symbol` key that no
+code outside `src/config.ts` can even spell, let alone forge, short of an
+explicit `as unknown as SafePlugTarget` lie a reviewer would have to wave
+through. `test/unit/config.test.ts` pins this with a `@ts-expect-error`
+assignment of a real `FleetPlugTarget` where a `SafePlugTarget` is
+required — mutation-tested (the directive removed, `bun run typecheck`
+observed to fail with `TS2741` at that exact line, the file's own
+`git diff --stat` confirmed changed, then restored).
+
+**The config is also refused, at LOAD TIME, when the fleet plug and the
+safe plug resolve to the SAME device** — identical `mac` and identical
+`subDeviceId` (or both absent), after trim/lowercase normalization. This
+check cannot see two different mac addresses that happen to name the same
+physical device (an operator data-entry duplicate), nor a sub-device
+relationship the config never expressed via `subDeviceId` — it is a
+syntactic equality check over configured identifiers, not device
+introspection; see `src/config.ts`'s `samePlugIdentity()` for this stated
+in code.
+
+**The sub-device requirement.** Relayed ground truth (not measured by this
+repo): the fleet box's plug is a plain `Plug` (model `WLPP1CFH`, itself a
+configuration VALUE — never hard-coded) with no `-SUB` children, while an
+`OutdoorPlug` (model `WLPPO`) DOES have `-SUB` children, where the
+addressable switchable thing is a SUB-DEVICE, not the device itself. Both
+`fleetPlug` and `safePlug` carry an optional `subDeviceId` for exactly this
+case — `null` means "this plug target IS the addressable device"; a
+non-null value names which sub-device is the actual switchable target.
+That a sub-device is separately addressable this way is RELAYED, not
+measured by this repo.
 
 ### Tests
 
