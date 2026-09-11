@@ -3236,24 +3236,43 @@ wraps in a `docs/capture-format.md` `CaptureRecord`
 (`src/capture-format.ts`, reused unchanged, never re-implemented) — the
 exact command, the exact `--json` output, timestamps, the verdict, and
 what was expected BEFORE the run. `docs/write-rehearsal-procedure.md`
-walks the executor through filling that in, redacting addresses via
-`redactAddressesForPasteBack()` before any paste-back, and (only if the
-run was `confirmed` and the executor chooses to) converting it into a
-`PROVENANCE: CAPTURED-LIVE, ...` fixture comment via
+walks the executor through filling that in, redacting via
+`renderRehearsalForPasteBack()` before any paste-back (see below), and
+(only if the run was `confirmed` and the executor chooses to) converting
+it into a `PROVENANCE: CAPTURED-LIVE, ...` fixture comment via
 `toProvenanceFixtureComment()`, for a LATER, separate, reviewed PR.
 
 **Identifiers are legible on the screen, exactly like `wyzr doctor`'s own
-plug rows** — the safe plug's configured name/mac/model appear in this
-command's ordinary human/`--json` output, deliberately not redacted there
-(see `wyzr doctor`'s own README section for why: a mistaken refusal with
-its identifiers scrubbed is undiagnosable). The capture format's own
-`redactAddressesForPasteBack()` only ever catches IP-shaped literals — it
-cannot and does not catch a plug name or mac, so
-`docs/write-rehearsal-procedure.md` says explicitly, as its own step: an
-executor must replace the safe plug's name/mac with a placeholder BY HAND
-before pasting anything outside their own screen.
+plug rows** — the safe plug's configured name/mac/model/sub-device-id
+appear in this command's ordinary human/`--json` output, deliberately not
+redacted there (see `wyzr doctor`'s own README section for why: a
+mistaken refusal with its identifiers scrubbed is undiagnosable).
 
-### Why no gate, no wrong-box guard
+**The paste-back redaction is a dedicated, rehearsal-specific function,
+not the generic address regex alone (WYZR-30 review finding 2, measured
+2026-09-11).** `src/capture-format.ts`'s `redactAddressesForPasteBack()`
+only ever catches IP-shaped literals — measured directly: a
+colon-separated mac happened to survive only because it incidentally
+matches the IPv6-candidate pattern, while a dash-separated form, a bare
+(no-separator) form, a dotted form, and the plug's configured NAME all
+survived untouched, and a `<mac>-SUB1`-shaped sub-device id left the
+`-SUB1` suffix attached to the (accidentally) redacted mac — still
+disclosing a sub-device existed. `src/rehearsal-paste-back.ts`'s
+`redactSafePlugIdentityForPasteBack()` closes this by VALUE rather than
+by shape: it knows this run's own configured `mac`/`name`/`subDeviceId`
+(`RehearsalSafePlugIdentity`) and elides exactly those strings, longest
+value first (so a mac that is itself a substring of a compound
+`subDeviceId` is consumed as part of the longer match, never left as a
+leaking fragment), regardless of spelling. `renderRehearsalForPasteBack()`
+composes it with `redactAddressesForPasteBack()` into the ONE function
+`docs/write-rehearsal-procedure.md` points the executor at — and because
+this command's own `--json` output never runs the wrong-box guard (see
+below), it names no OTHER identifier at all, so this redaction is
+comprehensive for this command's own output shape, not merely
+best-effort. `test/unit/rehearsal-paste-back.test.ts` pins every spelling
+the review measured as leaking, by name.
+
+### Why no gate, no wrong-box guard — and the one thing this reasoning does NOT close (WYZR-30 review finding 1)
 
 Deliberately absent, unlike `src/cycle-runner.ts`. The wrong-box guard
 answers "is THIS MACHINE the fleet box" — a host-identity question `wyzr
@@ -3262,6 +3281,27 @@ this command can never be pointed at the fleet plug at all (property 1),
 so there is no analogous host-identity question to ask. The wedge gate
 answers "is the fleet box definitively gone" — irrelevant to rehearsing a
 write against an unrelated, currently-in-use safe plug.
+
+**That reasoning answers the wrong-box question; it does not answer the
+adjacent one, and review caught that it needs to be asked: does the SAFE
+PLUG power the box THIS COMMAND is running on?** No code anywhere in this
+codebase can know what a plug powers, so this is NOT, and cannot be, a
+guard — code genuinely cannot close it. If it were true, the OFF this
+module attempts would cut power to the process running it: the
+never-give-up restore never executes (it needs the process alive to
+retry), no outcome is ever returned, and no capture-format evidence is
+produced — the plug is simply off, with no record anything happened. This
+is a DIFFERENT failure class from every "property 3" test in this PR: a
+test harness cannot construct "the process ceased to exist mid-run," so
+those tests' own "no path ends with the plug off" proof holds only for
+every failure the running process SURVIVES — stated as exactly that scope
+in `src/rehearsal-runner.ts`'s own comment and in `docs/write-rehearsal-procedure.md`'s
+own honesty section. The fix is PROCEDURAL, not code: that document's
+"Confirm the safe plug is safe to toggle RIGHT NOW" section requires the
+executor to confirm the safe plug does not power their own machine (or
+its network path to the Wyze cloud) as the FIRST check in that section,
+stated as a failure condition before anything is run — recoverable by
+hand, but never a case this command's own evidence trail can report on.
 
 ### Why the same-device check runs before any read
 
@@ -3325,7 +3365,7 @@ REUSING `src/cycle-report.ts`'s own exported `projectOff()`/
                                | stranded | confirmed */,
   "dryRun": true,
   "reasons": ["..."],           // the full ordered evidence trail
-  "safePlug": { "mac": "...", "model": "...", "name": "..." },
+  "safePlug": { "mac": "...", "model": "...", "name": "...", "subDeviceId": null },
   "preconditions": { "outcome": "cleared", "power": "on", "reachable": true, "note": null },
   "off": null,                  // populated once OFF is attempted — same shape as
                                  // "wyzr cycle"'s own `off` field
@@ -3357,6 +3397,16 @@ state:
    comment, this README section, and this command's own output describe
    what the code is BUILT to do, never what it has been observed to do —
    do not read this section as implying the rehearsal has happened.**
+
+**One more scope caveat, added by review (finding 1): "no path ends with
+the plug off" (property 3) is a property of this command's own code,
+proven for every failure the running process SURVIVES.** It says nothing
+about the process itself being killed mid-run — which happens if the safe
+plug powers the machine running the command — because no in-process test
+can construct that case, and no code here can detect it. See "Why no
+gate, no wrong-box guard" above for the full reasoning and the procedural
+(not code) fix `docs/write-rehearsal-procedure.md` requires of the
+executor.
 
 ## The capture format
 

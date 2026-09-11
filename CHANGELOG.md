@@ -149,6 +149,22 @@ All notable changes to this project are documented in this file.
   - No new config surface: reuses `config.fleetPlug`/`config.safePlug`
     (required, WYZR-28) and `config.cycle.timing` (WYZR-19/WYZR-27)
     unchanged.
+  - `src/rehearsal-paste-back.ts` (review finding 2): the generic
+    `redactAddressesForPasteBack()` alone was measured to miss the safe
+    plug's own configured NAME in every case and its MAC in every
+    spelling but one (a colon-form mac only survived by accident, matching
+    the IPv6-candidate pattern). `renderRehearsalForPasteBack()` elides
+    this run's own `mac`/`name`/`subDeviceId` by VALUE, regardless of
+    spelling, composed with the address redaction — the one function
+    `docs/write-rehearsal-procedure.md` now points the executor at.
+  - `docs/write-rehearsal-procedure.md` (review finding 1): a new,
+    first-in-section step requires the executor to confirm the safe plug
+    does not power the machine running the command before proceeding — if
+    it does, the OFF would cut power to the process itself, and the
+    never-give-up restore (which needs the process alive to retry) never
+    runs. No code can detect this; "no path ends with the plug off" is now
+    stated everywhere as holding for every failure the running process
+    SURVIVES, not for the process being killed mid-run.
 
 - The post-cycle recovery engine and `wyzr recovery status` (WYZR-18/WYZR-25)
   — a read-only command answering "did that power cycle actually work?" with

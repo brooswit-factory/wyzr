@@ -74,6 +74,26 @@
 // analogous host-identity question to ask. The wedge gate answers "is the
 // fleet box definitively gone" — irrelevant to rehearsing a write against
 // an unrelated, currently-in-use safe plug.
+//
+// THE RESIDUAL CASE THIS REASONING LEAVES OPEN (WYZR-30 review finding 1,
+// 2026-09-11): "is THIS MACHINE the fleet box" is the wrong question to
+// have asked here — the right, adjacent one is "does the SAFE PLUG power
+// the box this command is running on?" No code anywhere in this codebase
+// can answer that (nothing here can know what a plug powers), so it is
+// NOT, and cannot be, a guard. If it is true, the OFF this module attempts
+// cuts power to the process running it — the never-give-up restore never
+// executes, no outcome is ever returned, and no capture-format evidence is
+// produced; the plug is simply off, with no record anything happened.
+// This is NOT the same failure class as guard 2 (fleet-plug identity):
+// guard 2 is closed, structurally and at runtime; THIS is closed
+// PROCEDURALLY, in docs/write-rehearsal-procedure.md's own "before you
+// start" section, which requires the executor to confirm the safe plug
+// does not power their own machine before ever running the confirmed
+// write. Consequently, "no path ends with the plug off" (property 3) is
+// proven by this module and test/unit/rehearsal-runner.test.ts's own
+// suite ONLY for every failure the process itself SURVIVES — a process
+// that dies mid-run is outside what any in-process test can construct,
+// and outside what this comment claims to cover.
 
 import type { PlugReader, PlugWriter } from "./cycle-plug.ts";
 import type { CycleClock } from "./cycle-clock.ts";
@@ -108,6 +128,11 @@ export interface RehearsalSafePlugIdentity {
   readonly mac: string;
   readonly model: string;
   readonly name: string;
+  /** `null` when the safe plug target IS the addressable device — see
+   * src/config.ts's `PlugTargetFields.subDeviceId` own comment. Carried
+   * here (WYZR-30 review finding 2) so src/rehearsal-paste-back.ts can
+   * elide it by VALUE on the paste-back path, same as `mac`/`name`. */
+  readonly subDeviceId: string | null;
 }
 
 /** The full evidence trail plus verdict — same "evidence is the product"
@@ -148,7 +173,7 @@ export interface RehearsalRunnerDeps {
 }
 
 function identityOf(plug: SafePlugTarget): RehearsalSafePlugIdentity {
-  return { mac: plug.mac, model: plug.model, name: plug.name };
+  return { mac: plug.mac, model: plug.model, name: plug.name, subDeviceId: plug.subDeviceId };
 }
 
 interface Preamble {

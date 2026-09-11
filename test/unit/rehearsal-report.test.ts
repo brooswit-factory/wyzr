@@ -8,7 +8,7 @@ import { ExitCode } from "../../src/errors.ts";
 import { formatRehearsalHuman, rehearsalOutcomeExitCode, REHEARSAL_SCHEMA_VERSION, toRehearsalJson } from "../../src/rehearsal-report.ts";
 import type { RehearsalResult } from "../../src/rehearsal-runner.ts";
 
-const SAFE_IDENTITY = { mac: "11:22:33:44:55:02", model: "WLPPO", name: "fixture-safe-plug" };
+const SAFE_IDENTITY = { mac: "11:22:33:44:55:02", model: "WLPPO", name: "fixture-safe-plug", subDeviceId: null };
 
 function baseResult(overrides: Partial<RehearsalResult> = {}): RehearsalResult {
   return {
