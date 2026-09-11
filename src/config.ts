@@ -282,7 +282,7 @@ function requireDaemonScope(obj: Record<string, unknown>, path: string): DaemonS
 /** The fields either plug target carries. Unbranded on its own — never
  * returned to a caller in this shape; always wrapped as a `FleetPlugTarget`
  * or a `SafePlugTarget` below before this module hands it out. */
-interface PlugTargetFields {
+export interface PlugTargetFields {
   readonly mac: string;
   readonly model: string;
   readonly name: string;
@@ -385,7 +385,15 @@ function normalizeIdentityField(s: string | null): string | null {
   return s === null ? null : s.trim().toLowerCase();
 }
 
-function samePlugIdentity(a: PlugTargetFields, b: PlugTargetFields): boolean {
+/** Exported for `src/rehearsal-runner.ts`'s own independent, defense-in-
+ * depth "does the safe plug resolve to the fleet plug" runtime check — see
+ * that module's top comment for why a SECOND check reusing this exact
+ * function (never a re-derived comparison) is worth having even though
+ * `refuseIfPlugsConflate()` below already makes the conflated case
+ * unreachable through `loadWyzrConfig()` itself. Reused, not
+ * re-implemented — the same "the same device" semantics apply identically
+ * wherever two plug identifiers are compared in this codebase. */
+export function samePlugIdentity(a: PlugTargetFields, b: PlugTargetFields): boolean {
   if (normalizeIdentityField(a.mac) !== normalizeIdentityField(b.mac)) return false;
   const subA = normalizeIdentityField(a.subDeviceId);
   const subB = normalizeIdentityField(b.subDeviceId);

@@ -66,15 +66,25 @@ function importClosure(entryPath: string): { reached: Set<string>; pathTo: Map<s
 /** The orchestration modules that must be unreachable: each one either
  * unconditionally contains a write call (src/cli-plug.ts's `runPlugWrite`)
  * or exists specifically to wire a live write path together
- * (src/cycle-runner.ts, src/cli-cycle.ts). Does NOT include
- * src/cycle-plug.ts (which this command legitimately imports for the
- * `PlugReader` TYPE — see this file's own top comment), src/auth-session.ts,
+ * (src/cycle-runner.ts, src/cli-cycle.ts, and — WYZR-30 — the write
+ * rehearsal's own src/rehearsal-runner.ts/src/cli-rehearsal.ts). Does NOT
+ * include src/cycle-plug.ts (which this command legitimately imports for
+ * the `PlugReader` TYPE — see this file's own top comment), src/auth-session.ts,
  * or src/transport*.ts, all of which this command necessarily reaches to
- * perform its one real read. The later write-rehearsal module (task 3 of
- * this story, not yet landed) belongs on this list too once it exists —
- * flagged here rather than guessed at, per this ticket's own instruction
- * ("the rehearsal module when task 3 lands"). */
-const FORBIDDEN_MODULES = [resolve(SRC_ROOT, "cli-plug.ts"), resolve(SRC_ROOT, "cycle-runner.ts"), resolve(SRC_ROOT, "cli-cycle.ts")];
+ * perform its one real read.
+ *
+ * WYZR-30: watched failing first, per the ticket's own instruction — a
+ * temporary `import "./rehearsal-runner.ts";` added to src/cli-doctor.ts
+ * made this test fail with "src/rehearsal-runner.ts IS reachable from
+ * src/cli-doctor.ts, via: ..." (captured in this PR's own body), then the
+ * import was removed and this test re-confirmed green. */
+const FORBIDDEN_MODULES = [
+  resolve(SRC_ROOT, "cli-plug.ts"),
+  resolve(SRC_ROOT, "cycle-runner.ts"),
+  resolve(SRC_ROOT, "cli-cycle.ts"),
+  resolve(SRC_ROOT, "rehearsal-runner.ts"),
+  resolve(SRC_ROOT, "cli-rehearsal.ts"),
+];
 
 describe("src/cli-doctor.ts — no import path to a write-orchestrating module", () => {
   test("no import path exists from src/cli-doctor.ts to cli-plug.ts, cycle-runner.ts, or cli-cycle.ts", () => {

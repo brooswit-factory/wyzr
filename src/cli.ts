@@ -21,6 +21,7 @@ import { defaultRecoveryStatusDeps, runRecoveryStatus, type RecoveryStatusDeps }
 import { defaultCycleCommandDeps, parseCycleArgs, runCycleCommand, type CycleCommandDeps } from "./cli-cycle.ts";
 import { runDoctorCommand } from "./cli-doctor.ts";
 import { defaultDoctorRunnerDeps, type DoctorRunnerDeps } from "./doctor-runner.ts";
+import { defaultRehearsalCommandDeps, parseRehearsalArgs, runRehearsalCommand, type RehearsalCommandDeps } from "./cli-rehearsal.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
 import { printError, printHuman, printJsonError } from "./output.ts";
@@ -250,6 +251,20 @@ export async function dispatchDoctor(
   return runDoctorCommand(deps, json);
 }
 
+/** `rehearse-safe-plug-write` has no subcommand and no positional argument
+ * at all — see src/cli-rehearsal.ts's own top comment for why an unexpected
+ * argument here is a Usage error, never a silently-accepted device query.
+ * NOT part of `wyzr doctor`'s ordinary preflight, never reachable from it —
+ * see test/unit/doctor-imports.test.ts's FORBIDDEN_MODULES. */
+export async function dispatchRehearsal(
+  rest: string[],
+  json: boolean,
+  deps: RehearsalCommandDeps = defaultRehearsalCommandDeps,
+): Promise<number> {
+  const options = parseRehearsalArgs(rest);
+  return runRehearsalCommand(deps, json, options);
+}
+
 const defaultDispatch: Dispatch = async (command, rest, opts) => {
   if (command === "devices") {
     return dispatchDevices(rest, opts.json);
@@ -268,6 +283,9 @@ const defaultDispatch: Dispatch = async (command, rest, opts) => {
   }
   if (command === "doctor") {
     return dispatchDoctor(rest, opts.json);
+  }
+  if (command === "rehearse-safe-plug-write") {
+    return dispatchRehearsal(rest, opts.json);
   }
   throw new CliError(`Unknown command: ${command}`, ExitCode.Usage);
 };
@@ -302,7 +320,13 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "                          config, credentials, cloud reachability, both configured plugs, the\n" +
         "                          outside instruments, and the wrong-box guard's verdict about THIS\n" +
         "                          machine. Structurally incapable of switching a plug — see README's\n" +
-        "                          \"wyzr doctor\" section.",
+        "                          \"wyzr doctor\" section.\n" +
+        "  rehearse-safe-plug-write [--dry-run]\n" +
+        "                          The staged rehearsal of this product's first real plug write, on the\n" +
+        "                          configured SAFE plug only — never the fleet plug, never by default,\n" +
+        "                          never part of the ordinary preflight. See\n" +
+        "                          docs/write-rehearsal-procedure.md before ever running this for real,\n" +
+        "                          and README's \"wyzr rehearse-safe-plug-write\" section.",
     );
     return ExitCode.Ok;
   }

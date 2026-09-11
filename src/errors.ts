@@ -182,6 +182,42 @@ export const ExitCode = {
    * operator-fixable setup gap, never possible evidence of a broken
    * install. */
   DoctorUnconfigured: 29,
+  /** `wyzr rehearse-safe-plug-write` (WYZR-20/WYZR-30) only: the runtime
+   * defense-in-depth check found the configured safe plug resolves to the
+   * SAME device as the configured fleet plug. NOT reachable through the
+   * real CLI today — `src/config.ts`'s `loadWyzrConfig()` already refuses
+   * to construct a `WyzrConfig` where the two conflate (`ExitCode.ConfigInvalid`/
+   * `config_plug_conflation`), so any `WyzrConfig` this command holds is
+   * already a live proof the two plugs differ. Kept and given its own code
+   * anyway, exactly like `src/cli-cycle.ts`'s `resolveForced()` keeps a
+   * defensive Usage error for its own "unreachable in practice" branch: a
+   * second, independent guard beats relying solely on one upstream check
+   * for the one operation in this product that must NEVER reach the fleet
+   * plug — see `src/rehearsal-runner.ts`'s own top comment. */
+  RehearsalRefusedSameAsFleetPlug: 30,
+  /** `wyzr rehearse-safe-plug-write` only: refused by the before-the-cut
+   * precondition — the cloud could not be reached, or the safe plug's
+   * P3/P5 could not both be read confidently, immediately before the OFF
+   * would have been attempted. Composed from the exact same
+   * `src/cycle-preconditions.ts` engine `wyzr cycle` uses — see that
+   * module's own comment: "an operator who cannot turn the plug back ON
+   * must never be allowed to turn it off" applies identically here. */
+  RehearsalRefusedByPrecondition: 31,
+  /** `wyzr rehearse-safe-plug-write --dry-run` (or the un-confirmed preview
+   * printed before the confirmation ceremony) only: every refusal check
+   * cleared, so a confirmed run at this exact moment would proceed to cut
+   * power on the configured safe plug. Mirrors `ExitCode.CycleDryRunWouldAct`'s
+   * own reasoning for why this needs its own code distinct from the two
+   * refusals above. */
+  RehearsalPreviewWouldWrite: 32,
+  /** `wyzr rehearse-safe-plug-write` only, and the loudest code this
+   * command can produce: the OFF was attempted, the never-give-up ON
+   * restore (composed, never reimplemented, from `src/cycle-runner.ts`'s
+   * own `performRestoreNeverGiveUp()`) ran to its configured bound, and the
+   * safe plug's own read-back never confirmed "on". NEVER reported as
+   * success — mirrors `ExitCode.CycleStranded` exactly, for the safe plug
+   * instead of the fleet plug. */
+  RehearsalStranded: 33,
 } as const;
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
@@ -221,6 +257,10 @@ export const ExitCodeName: Record<ExitCode, string> = {
   [ExitCode.DoctorNotReady]: "doctor_not_ready",
   [ExitCode.DoctorInconclusive]: "doctor_inconclusive",
   [ExitCode.DoctorUnconfigured]: "doctor_unconfigured",
+  [ExitCode.RehearsalRefusedSameAsFleetPlug]: "rehearsal_refused_same_as_fleet_plug",
+  [ExitCode.RehearsalRefusedByPrecondition]: "rehearsal_refused_by_precondition",
+  [ExitCode.RehearsalPreviewWouldWrite]: "rehearsal_preview_would_write",
+  [ExitCode.RehearsalStranded]: "rehearsal_stranded",
 };
 
 export class CliError extends Error {

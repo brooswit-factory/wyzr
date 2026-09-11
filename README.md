@@ -62,6 +62,14 @@ Commands:
                           verdict. DESTRUCTIVE. --dry-run is the only way to exercise this
                           verb's judgment without cutting power. See README's "wyzr cycle"
                           section before ever running this for real.
+  doctor                  Is this install actually able to pull the lever? Read-only
+                          preflight — see README's "wyzr doctor" section.
+  rehearse-safe-plug-write [--dry-run]
+                          The staged rehearsal of this product's FIRST real plug write —
+                          on the configured SAFE plug only, never the fleet plug, never by
+                          default. See docs/write-rehearsal-procedure.md before ever
+                          running this for real, and README's
+                          "wyzr rehearse-safe-plug-write" section.
 ```
 
 `--json` switches success output to machine-readable JSON on stdout and
@@ -109,16 +117,22 @@ stories — the numbers already assigned here never change or get reused.
 | 27   | `doctor_not_ready` | `wyzr doctor` only: at least one check affirmatively FAILED — see "`wyzr doctor`" below. |
 | 28   | `doctor_inconclusive` | `wyzr doctor` only: nothing failed, but at least one attempted check could not be read. |
 | 29   | `doctor_unconfigured` | `wyzr doctor` only: nothing failed and nothing was unreadable — the only gaps are things nobody ever pointed anywhere (no `config.json` at all, or an optional section left out). |
+| 30   | `rehearsal_refused_same_as_fleet_plug` | `wyzr rehearse-safe-plug-write` only: the runtime defense-in-depth check found the configured safe plug resolves to the SAME device as the configured fleet plug — see "`wyzr rehearse-safe-plug-write`" below. NOT reachable through the real CLI today (`config_invalid`/`config_plug_conflation` already refuses at load time); kept as a second, independent guard anyway. |
+| 31   | `rehearsal_refused_by_precondition` | `wyzr rehearse-safe-plug-write` only: refused by the before-the-cut precondition (cloud unreachable, or the safe plug's P3/P5 not both readable) — the exact same engine `wyzr cycle` uses (`src/cycle-preconditions.ts`), composed unchanged. |
+| 32   | `rehearsal_preview_would_write` | `wyzr rehearse-safe-plug-write --dry-run` (or the preview printed before the confirmation ceremony) only: every refusal check cleared — a confirmed run at this moment would proceed to cut power on the configured safe plug. |
+| 33   | `rehearsal_stranded` | `wyzr rehearse-safe-plug-write` only, and the loudest code this command can produce: the OFF was attempted, the never-give-up ON restore ran to its bound, and the safe plug's own read-back never confirmed "on". NEVER reported as success. |
 
 Codes 8/9/10 were added by `wyzr plug status|on|off` (WYZR-13); 11/12 were
 added by `wyzr wedge status` (WYZR-17); 13/14/15/16 were added by `wyzr
 recovery status` (WYZR-25); 17-25 were added by `wyzr cycle` (WYZR-19/
 WYZR-27); 26 was added by the config file (WYZR-20/WYZR-28); 27/28/29 were
-added by `wyzr doctor` (WYZR-29) — all appending only, never renumbering or
-reusing an existing code. 0–7 are unchanged from earlier stories. `wyzr
-cycle`'s own success (cycled and recovered) reuses exit `0`, by symmetry
-with `recovery status`'s RECOVERED — `wyzr doctor`'s own READY verdict does
-the same.
+added by `wyzr doctor` (WYZR-29); 30-33 were added by
+`wyzr rehearse-safe-plug-write` (WYZR-20/WYZR-30) — all appending only,
+never renumbering or reusing an existing code. 0–7 are unchanged from
+earlier stories. `wyzr cycle`'s own success (cycled and recovered) reuses
+exit `0`, by symmetry with `recovery status`'s RECOVERED — `wyzr doctor`'s
+own READY verdict and `wyzr rehearse-safe-plug-write`'s own `confirmed`
+outcome do the same.
 
 ### Two classes of non-zero exit code
 
@@ -183,6 +197,21 @@ observed — NOT_READY, INCONCLUSIVE, or UNCONFIGURED are the command
 payload (see "`wyzr doctor`" below) to stdout and returns the code;
 `--json` mode never wraps any of these in the `{"error": {...}}` shape
 either.
+
+**Codes `30`-`33` are OUTCOME codes too, on the same reasoning.** `wyzr
+rehearse-safe-plug-write` runs its own guards and (once cleared) the
+OFF/wait/never-give-up-ON sequence and is reporting exactly what happened —
+a refusal (`30`/`31`), a would-write preview (`32`), and a stranded restore
+(`33`) are ALL the command *working*, not failing. It prints its normal,
+documented evidence-trail payload (see "`wyzr rehearse-safe-plug-write`"
+below) to stdout and returns the code; `--json` mode never wraps any of
+these in the `{"error": {...}}` shape either. **The one genuine usage error
+this command adds — an unrecognized/extra argument (this command takes NO
+device argument, ever), both `--dry-run` and the confirm flag given
+together, or a requested confirmation that was never satisfied — is an
+ordinary Usage error (`2`)**, the same class as a missing `<device>`
+argument elsewhere in this CLI, not a claim about the safe plug or the
+write itself.
 
 **Neither `9` nor `10` is a claim that a write did nothing.** `9` on the
 write path means the write was accepted by Wyze AND its resulting state
@@ -3015,6 +3044,319 @@ to what THIS command specifically composes:
    incapable of switching a plug" above) — `plug on`/`plug off` have never
    run through this product, by anyone, ever, and this command cannot
    exercise them even by accident.
+
+## `wyzr rehearse-safe-plug-write`
+
+**The first plug write this product has ever performed, by anyone, ever —
+a deliberate, staged rehearsal, not something that happens incidentally
+the first time someone needs `wyzr cycle`'s own lever at 3am.**
+`plug on`/`plug off`, and therefore `wyzr cycle` itself (which is built
+entirely on the same OFF/wait/ON primitives), have never run through this
+product's code. This command is what moves the write path from "never
+exercised" to "exercised by this code, once, on a date a human executor
+recorded" — **when a human runs it, not when this merged.** See
+`docs/write-rehearsal-procedure.md` for the full executor procedure; this
+section covers the design.
+
+```sh
+wyzr rehearse-safe-plug-write --dry-run             # preview only — the DEFAULT, and what no flags does too
+wyzr rehearse-safe-plug-write \
+  --confirm-write-i-have-chosen-this-moment \
+  --non-interactive-confirm-target=<configured-safe-plug-name>
+                                                      # the confirmed, live write — see "The confirmation
+                                                      # ceremony" below
+```
+
+**No agent ever runs this command for real.** Agents run on the fleet box,
+where `wyzr` is forbidden to be installed — no agent can ever execute this
+product against a real account. A named human executor on the manager box
+runs it, at a moment they choose. `docs/write-rehearsal-procedure.md` is
+written for exactly that reader.
+
+### Property 1 — safe-plug-only, two independent guards, neither optional
+
+**The fleet plug is not a test target under any circumstances.** WYZR-28
+branded the fleet plug and the safe plug as `FleetPlugTarget`/
+`SafePlugTarget` (`src/config.ts`), two structurally unrelated TypeScript
+types sharing every field name, using a module-private `unique symbol` per
+type — the exact same technique `src/cycle-preconditions.ts`'s
+`PreconditionsClearedWitness` established. `src/rehearsal-runner.ts`'s two
+entry points (`runRehearsalPreview()`/`runRehearsalLive()`) accept ONLY a
+`SafePlugTarget` — passing a `FleetPlugTarget` anywhere one is required is
+a **compile error**, pinned in `test/unit/rehearsal-runner.test.ts` with a
+`@ts-expect-error`, mutation-tested (removing the directive makes
+`bun run typecheck` fail with `TS2741` — captured in this ticket's own PR
+body).
+
+**A second, independent, RUNTIME check on top of the type.** Before any
+read or write is attempted, `runPreamble()` calls an injected
+`sameDeviceCheck(fleetPlug, safePlug)` — defaulting to `src/config.ts`'s
+own `samePlugIdentity()`, reused rather than re-derived — and refuses
+(`refused_same_as_fleet_plug`) if it returns true. **This is provably
+unreachable through the real CLI today**: `loadWyzrConfig()` itself
+already refuses to construct a `WyzrConfig` whose two plugs conflate
+(`config_invalid`/`config_plug_conflation`, exhaustively tested in
+`test/unit/config.test.ts`), so any config this command's wiring holds is
+already live proof the two plugs differ. **Kept anyway**, on the exact
+precedent `src/cli-cycle.ts`'s `resolveForced()` sets for its own
+"unreachable in practice" branch — a second guard beats relying on one
+upstream check alone for the one operation in this whole product that must
+never reach the fleet plug. Because the branding makes it impossible for
+any test to construct a genuinely conflated `(FleetPlugTarget,
+SafePlugTarget)` pair (short of the `as unknown as` lie `src/config.ts`'s
+own top comment forbids), `sameDeviceCheck` is injectable specifically so
+`test/unit/rehearsal-runner.test.ts` can prove this module's own WIRING
+reacts correctly to a same-device signal (via a fake comparator whose call
+is itself proven reached) without re-testing `samePlugIdentity()`'s own
+comparison semantics, which are already exhaustive in
+`test/unit/config.test.ts` — the same "each check proves a different
+property" split WYZR-29's doctor-no-write trio already established.
+
+**Not reachable by omission or defaulting, checked explicitly:**
+
+- **No configured safe plug → the command never runs at all.**
+  `safePlug` is a REQUIRED, non-optional field on `WyzrConfig`
+  (`src/config.ts`) — a config missing it refuses to load
+  (`config_invalid`/`config_field_missing`) before this command's own code
+  is ever reached. This is a property that holds BY THE TYPE, not a
+  runtime check this module performs and could forget — duplicating an
+  `if (!safePlug)` against a field TypeScript already guarantees present
+  would be dead, untestable code.
+- **No fallback to the fleet plug, the first plug on the account, or "the
+  only plug configured."** The safe plug is always, and only,
+  `config.safePlug` — there is no code path anywhere in
+  `src/rehearsal-runner.ts`/`src/cli-rehearsal.ts` that reads any other
+  plug identifier.
+- **No CLI positional argument, ever.** Unlike `plug status|on|off` and
+  `cycle <device>`, this command takes no device argument at all —
+  `parseRehearsalArgs()` (`src/cli-rehearsal.ts`) treats ANY unrecognized
+  token, including what would elsewhere be a device query, as a Usage
+  error. There is no parser branch where an extra argument survives to
+  become a plug identifier.
+
+### Property 2 — a human-chosen moment (the confirmation ceremony)
+
+Same precedent `src/cli-cycle.ts`'s D4 force ceremony sets, adapted for a
+verb with no gate to override: a long, explicit, self-describing flag
+(`--confirm-write-i-have-chosen-this-moment`) that cannot be hit by
+accident; the FULL unwritten preview printed BEFORE anything is acted on;
+an interactive confirmation that requires typing the safe plug's exact
+configured NAME back (not a host, since there is no wrong-box guard here —
+see "Why no gate, no wrong-box guard" below); and a separate explicit flag
+for the genuinely non-interactive case
+(`--non-interactive-confirm-target=<name>`) — **the confirm flag alone is
+never sufficient.** The ceremony lives in `src/cli-rehearsal.ts`, not
+`src/rehearsal-runner.ts`, for the identical reason `src/cli-cycle.ts`'s
+own top comment gives for its own ceremony: it is real, but it is not what
+makes this operation safe-plug-only — the TYPE is (property 1). A bug in
+the ceremony's own logic could at worst make confirming easier or harder
+than intended; it could never make a write reach the fleet plug.
+
+### Property 3 — read-back and restore impossible to skip: NO PATH ends with the plug off
+
+**Reused, not re-derived.** R2's reasoning in `src/cycle-runner.ts`
+("a thrown `set_property` cannot be distinguished from a write that landed
+with a lost response, so 'nothing happened, exit' is never safe") applies
+to this verb identically. Rather than re-deriving it, this module calls
+`src/cycle-runner.ts`'s own EXPORTED `performOff()`/
+`performRestoreNeverGiveUp()`/`describeOff()`/`describeRestore()`
+UNCHANGED — those functions are generic over `PlugWriter`/`CycleClock`/
+`CycleTimingConfig`/`PreconditionsClearedWitness`, with nothing gate/
+wrong-box/recovery-specific in their own bodies, so there is exactly ONE
+at-most-once-OFF/never-give-up-ON implementation in this codebase, not two
+that could silently diverge (`cycle-runner.ts`'s own top comment now
+documents this reuse). `evaluatePreconditions()`
+(`src/cycle-preconditions.ts`) is composed unchanged too — its
+`PreconditionsClearedWitness` gates `performOff()` here exactly as it
+gates `wyzr cycle`'s own OFF, and no flag anywhere in this codebase can
+forge one.
+
+**Every `return` in `runRehearsalLive()`, enumerated:**
+
+1. The refusal return (guard 2, or the precondition refusal) — happens
+   BEFORE `performOff()` is ever called. No write is reachable on this
+   path: guard 2's refusal performs ZERO I/O of any kind (not even a
+   read — see "Why the same-device check runs before any read" below);
+   the precondition refusal performs exactly one READ, never a write.
+2. The `stranded` return — reached ONLY after `performOff()` (the write)
+   AND `performRestoreNeverGiveUp()` (the restore attempt) have both run
+   to completion and their evidence is recorded into `off`/`restore`.
+3. The `confirmed` return — reached ONLY after the identical sequence as
+   (2).
+
+**There is no `return` between the OFF write and the restore having been
+attempted** — the code between them is an evidence-trail push and an
+unconditional `await clock.sleep(...)`, no conditional branch, no early
+exit. `runRehearsalPreview()` is typed to accept only a `PlugReader`, so a
+write call anywhere in its body does not typecheck — "a path that reaches
+a write" is impossible there by construction, not merely untested.
+
+**Required test, satisfied in `test/unit/rehearsal-runner.test.ts`'s own
+"property 3" suite:** every constructed failure case (the OFF write
+itself throws; the OFF read-back throws; the OFF read-back says
+"unknown"; the restore itself throws on every attempt and never confirms)
+asserts the restore was still ATTEMPTED (`restore.attempts.length > 0`)
+and the outcome still REPORTED — an unconfirmed restore is `stranded`,
+reported exactly as loudly as `wyzr cycle`'s own `CycleStranded`: the
+message states power is OFF, the restore was NOT confirmed, and instructs
+restoring the SAFE plug by hand (see "Why the safe plug's STRANDED message
+has no configured remote command" below) — **never reported as success.**
+
+### Property 4 — opt-in and explicit, never part of the ordinary preflight, never by default
+
+**With NO flags at all, this command runs the exact same preview
+`--dry-run` produces — never a write.** Only
+`--confirm-write-i-have-chosen-this-moment` (plus a satisfied
+confirmation) ever reaches `runRehearsalLive()`.
+
+**`wyzr doctor` is structurally incapable of reaching this command's write
+path.** `test/unit/doctor-imports.test.ts`'s `FORBIDDEN_MODULES` (the
+import-closure walk from `src/cli-doctor.ts`) now also names
+`src/rehearsal-runner.ts` and `src/cli-rehearsal.ts` — extended, watched
+failing first: a temporary `import "./rehearsal-runner.ts";` added to
+`src/cli-doctor.ts` made this test fail with
+`src/cycle-runner.ts IS reachable from src/cli-doctor.ts, via: ... ->
+src/rehearsal-runner.ts -> src/cycle-runner.ts` (captured in this ticket's
+own PR body; `src/cycle-runner.ts` was the first forbidden module the walk
+encountered, since `src/rehearsal-runner.ts` imports it — either name
+appearing reachable is the same real signal), then the import was removed
+and the test re-confirmed green.
+`test/unit/doctor-no-write.test.ts` needed NO change: its own scanned set
+is DERIVED from `src/cli-doctor.ts`'s import closure (WYZR-20's own
+review finding on this epic), so it automatically excludes this command's
+files as long as they stay unreachable from the doctor — the property this
+task was most likely to break, and did not.
+
+### Property 5 — capture-format evidence
+
+**This command emits through `--json` exactly like `wyzr doctor`/`wyzr
+cycle` already do — it does not build a second evidence pipeline.**
+`src/rehearsal-report.ts`'s `RehearsalJson` is the payload an executor
+wraps in a `docs/capture-format.md` `CaptureRecord`
+(`src/capture-format.ts`, reused unchanged, never re-implemented) — the
+exact command, the exact `--json` output, timestamps, the verdict, and
+what was expected BEFORE the run. `docs/write-rehearsal-procedure.md`
+walks the executor through filling that in, redacting addresses via
+`redactAddressesForPasteBack()` before any paste-back, and (only if the
+run was `confirmed` and the executor chooses to) converting it into a
+`PROVENANCE: CAPTURED-LIVE, ...` fixture comment via
+`toProvenanceFixtureComment()`, for a LATER, separate, reviewed PR.
+
+**Identifiers are legible on the screen, exactly like `wyzr doctor`'s own
+plug rows** — the safe plug's configured name/mac/model appear in this
+command's ordinary human/`--json` output, deliberately not redacted there
+(see `wyzr doctor`'s own README section for why: a mistaken refusal with
+its identifiers scrubbed is undiagnosable). The capture format's own
+`redactAddressesForPasteBack()` only ever catches IP-shaped literals — it
+cannot and does not catch a plug name or mac, so
+`docs/write-rehearsal-procedure.md` says explicitly, as its own step: an
+executor must replace the safe plug's name/mac with a placeholder BY HAND
+before pasting anything outside their own screen.
+
+### Why no gate, no wrong-box guard
+
+Deliberately absent, unlike `src/cycle-runner.ts`. The wrong-box guard
+answers "is THIS MACHINE the fleet box" — a host-identity question `wyzr
+cycle` needs because it can legitimately be pointed at the fleet plug;
+this command can never be pointed at the fleet plug at all (property 1),
+so there is no analogous host-identity question to ask. The wedge gate
+answers "is the fleet box definitively gone" — irrelevant to rehearsing a
+write against an unrelated, currently-in-use safe plug.
+
+### Why the same-device check runs before any read
+
+If guard 2 ever DID trip (unreachable through the real CLI today — see
+property 1), running even a READ against the resolved plug would mean
+touching a device that, by definition, is the SAME device as the fleet
+plug. `runPreamble()` checks `sameDeviceCheck()` FIRST, and returns
+immediately — zero I/O of any kind, not even a read — before
+`evaluatePreconditions()` (which performs the one read this command
+otherwise needs) is ever called. Proven in
+`test/unit/rehearsal-runner.test.ts`: `plug.readCount`/`plug.writeCount`
+are both `0` when guard 2 refuses.
+
+### Why the safe plug's STRANDED message has no configured remote command
+
+`wyzr cycle`'s own STRANDED message names `cycle.handRestoreCommand` — a
+configured, operator-facing command, because the fleet box may not be
+somewhere an operator can walk up to. The safe plug's whole point is the
+opposite: it is chosen SPECIFICALLY because an executor can reach it
+directly. Reusing `cycle.handRestoreCommand` for a STRANDED safe plug
+would be actively misleading (it names how to restore a DIFFERENT
+device). This command's own STRANDED message instead names the safe
+plug's own configured identity (name + mac — legible, not a secret) and
+instructs restoring it by hand — its physical switch, or its normal Wyze
+app control — with no invented remote command that does not exist for
+this plug. `docs/write-rehearsal-procedure.md` requires the executor to
+confirm they have this hand fallback BEFORE they start, not after they
+discover they need it.
+
+### Configuration
+
+**No new config surface.** This command reads `config.fleetPlug`/
+`config.safePlug` (required, WYZR-28) and reuses `config.cycle.timing`
+(`CycleTimingConfig`, WYZR-19/WYZR-27) for its own OFF-wait-ON-never-give-up
+bounds — the identical shape applies identically to a different plug, so
+there is no reason for a second, parallel timing section. See "wyzr
+cycle"'s own "Configuration" section above for the full timing field
+table; every default there applies here unchanged.
+
+### Exit codes
+
+30-33 (`rehearsal_refused_same_as_fleet_plug`/`rehearsal_refused_by_precondition`/
+`rehearsal_preview_would_write`/`rehearsal_stranded`) — see "Exit codes"
+above for the full table and the "Codes 30-33 are OUTCOME codes" narrative.
+`confirmed` reuses exit `0`, by the same symmetry `wyzr cycle`'s own
+`recovered` and `wyzr doctor`'s own `READY` use.
+
+### The `--json` contract
+
+`src/rehearsal-report.ts`'s `RehearsalJson` (schema version `1`,
+`command: "rehearse-safe-plug-write"`) — allowlist-projected, never a raw
+spread of `RehearsalResult`. The `off`/`restore` sections are rendered by
+REUSING `src/cycle-report.ts`'s own exported `projectOff()`/
+`projectRestore()` verbatim — composed, not reimplemented.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "command": "rehearse-safe-plug-write",
+  "outcome": "would_write" /* | refused_same_as_fleet_plug | refused_by_precondition
+                               | stranded | confirmed */,
+  "dryRun": true,
+  "reasons": ["..."],           // the full ordered evidence trail
+  "safePlug": { "mac": "...", "model": "...", "name": "..." },
+  "preconditions": { "outcome": "cleared", "power": "on", "reachable": true, "note": null },
+  "off": null,                  // populated once OFF is attempted — same shape as
+                                 // "wyzr cycle"'s own `off` field
+  "restore": null                // populated once the restore runs — same shape as
+                                 // "wyzr cycle"'s own `restore` field
+}
+```
+
+### The honesty split — what this command stands on, and what it does not
+
+Same four-level split `wyzr cycle`'s/`wyzr doctor`'s own README sections
+state:
+
+1. **Never touched reality.** This command's own code — config, then
+   credentials, then a login attempt, then a plug read, the same-device
+   check, the OFF/wait/ON sequence — has never been exercised against a
+   real Wyze account by anyone. **No agent can ever run this command for
+   real.**
+2. **Exercised by hand, once, outside this product** (2026-09-10): see
+   `wyzr cycle`'s own honesty-split section — establishes A plug (not
+   necessarily this one) controls its box's power and that cutting it
+   does not brick it; nothing about this repo's code.
+3. **PROVEN through this repo's own code — the READ paths, 2026-09-11.**
+   `devices list`/`plug status` ran on the manager box against the real
+   account. This command's own plug-READ half (the precondition check)
+   stands on those same proven primitives.
+4. **Still never exercised: THIS command's own write, until a human runs
+   it.** This is the run that will move it. **Until then, every code
+   comment, this README section, and this command's own output describe
+   what the code is BUILT to do, never what it has been observed to do —
+   do not read this section as implying the rehearsal has happened.**
 
 ## The capture format
 
