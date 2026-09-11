@@ -18,6 +18,7 @@ import { runDevicesList } from "./cli-devices.ts";
 import { runPlugStatus, runPlugWrite } from "./cli-plug.ts";
 import { defaultWedgeStatusDeps, runWedgeStatus, type WedgeStatusDeps } from "./cli-wedge.ts";
 import { defaultRecoveryStatusDeps, runRecoveryStatus, type RecoveryStatusDeps } from "./cli-recovery.ts";
+import { defaultCycleCommandDeps, parseCycleArgs, runCycleCommand, type CycleCommandDeps } from "./cli-cycle.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
 import { printError, printHuman, printJsonError } from "./output.ts";
@@ -208,6 +209,29 @@ export async function dispatchRecovery(
   return runRecoveryStatus(deps, json, sinceMs, now);
 }
 
+/** `cycle`'s own subcommand routing: no subcommand at all — unlike
+ * `plug`/`wedge`/`recovery`, `cycle` has exactly one behavior, so its first
+ * positional argument is the `<device>` (mac or name — see
+ * src/device-resolve.ts), not a verb. `--dry-run`, the long force flag, and
+ * the non-interactive confirmation flag are parsed by
+ * src/cli-cycle.ts's parseCycleArgs() — see that module's own comment for
+ * why the force ceremony lives there rather than here. */
+export async function dispatchCycle(
+  rest: string[],
+  json: boolean,
+  deps: CycleCommandDeps = defaultCycleCommandDeps,
+): Promise<number> {
+  const { device, options } = parseCycleArgs(rest);
+  if (!device) {
+    throw new CliError(
+      "Usage: wyzr cycle <device> [--dry-run] [--json] [--force-override-gate-verdict-i-accept-the-risk] " +
+        "[--force-non-interactive-confirm-target=<target>]",
+      ExitCode.Usage,
+    );
+  }
+  return runCycleCommand(deps, device, json, options);
+}
+
 const defaultDispatch: Dispatch = async (command, rest, opts) => {
   if (command === "devices") {
     return dispatchDevices(rest, opts.json);
@@ -220,6 +244,9 @@ const defaultDispatch: Dispatch = async (command, rest, opts) => {
   }
   if (command === "recovery") {
     return dispatchRecovery(rest, opts.json);
+  }
+  if (command === "cycle") {
+    return dispatchCycle(rest, opts.json);
   }
   throw new CliError(`Unknown command: ${command}`, ExitCode.Usage);
 };
@@ -244,7 +271,12 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "  plug off <device>      Turn a plug off (read back to confirm).\n" +
         "  wedge status           Report the wedge-proof engine's full evidence trail and verdict (read-only).\n" +
         "  recovery status --since <ISO-8601 timestamp>\n" +
-        "                          Report post-cycle recovery evidence and verdict (read-only).",
+        "                          Report post-cycle recovery evidence and verdict (read-only).\n" +
+        "  cycle <device> [--dry-run]\n" +
+        "                          Gated power cycle: off, wait, never-give-up on, then a recovery\n" +
+        "                          verdict. DESTRUCTIVE. --dry-run is the only way to exercise this\n" +
+        "                          verb's judgment without cutting power. See README's \"wyzr cycle\"\n" +
+        "                          section before ever running this for real.",
     );
     return ExitCode.Ok;
   }

@@ -47,6 +47,15 @@ describe("ExitCode", () => {
       ExitCode.RecoveryFleetHalfRestored,
       ExitCode.RecoveryInconclusive,
       ExitCode.RecoveryUnconfigured,
+      ExitCode.CycleRefusedByGate,
+      ExitCode.CycleRefusedByWrongBoxGuard,
+      ExitCode.CycleRefusedByPrecondition,
+      ExitCode.CycleDryRunWouldAct,
+      ExitCode.CycleStranded,
+      ExitCode.CycleNotRecovered,
+      ExitCode.CycleFleetHalfRestored,
+      ExitCode.CycleRecoveryInconclusive,
+      ExitCode.CycleRecoveryUnconfigured,
     ];
     expect(new Set(codes).size).toBe(codes.length);
   });
@@ -103,6 +112,42 @@ describe("ExitCode", () => {
     expect(ExitCode.RecoveryFleetHalfRestored).toBe(14);
     expect(ExitCode.RecoveryInconclusive).toBe(15);
     expect(ExitCode.RecoveryUnconfigured).toBe(16);
+  });
+
+  // WYZR-27 decision: append-only continues — 0-16 must never move.
+  // Verified by reading this repo's highest existing code (16, WYZR-25's)
+  // before appending, per the ticket's explicit instruction to verify
+  // rather than trust a number relayed in the ticket text.
+  test("0-16 are untouched by WYZR-27's additions", () => {
+    expect(ExitCode.Ok).toBe(0);
+    expect(ExitCode.Generic).toBe(1);
+    expect(ExitCode.Usage).toBe(2);
+    expect(ExitCode.CredentialsInvalid).toBe(3);
+    expect(ExitCode.NotFound).toBe(4);
+    expect(ExitCode.Network).toBe(5);
+    expect(ExitCode.ApiError).toBe(6);
+    expect(ExitCode.MfaRequired).toBe(7);
+    expect(ExitCode.AmbiguousDevice).toBe(8);
+    expect(ExitCode.StateUnknown).toBe(9);
+    expect(ExitCode.WriteContradicted).toBe(10);
+    expect(ExitCode.WedgeNotProven).toBe(11);
+    expect(ExitCode.WedgeInconclusiveBySharedCause).toBe(12);
+    expect(ExitCode.RecoveryNotRecovered).toBe(13);
+    expect(ExitCode.RecoveryFleetHalfRestored).toBe(14);
+    expect(ExitCode.RecoveryInconclusive).toBe(15);
+    expect(ExitCode.RecoveryUnconfigured).toBe(16);
+  });
+
+  test("WYZR-27 appends 17-25 for wyzr cycle's outcome classes", () => {
+    expect(ExitCode.CycleRefusedByGate).toBe(17);
+    expect(ExitCode.CycleRefusedByWrongBoxGuard).toBe(18);
+    expect(ExitCode.CycleRefusedByPrecondition).toBe(19);
+    expect(ExitCode.CycleDryRunWouldAct).toBe(20);
+    expect(ExitCode.CycleStranded).toBe(21);
+    expect(ExitCode.CycleNotRecovered).toBe(22);
+    expect(ExitCode.CycleFleetHalfRestored).toBe(23);
+    expect(ExitCode.CycleRecoveryInconclusive).toBe(24);
+    expect(ExitCode.CycleRecoveryUnconfigured).toBe(25);
   });
 });
 
