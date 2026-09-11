@@ -160,6 +160,42 @@ call is not expected to ever produce a real one.
    confidence tier, the same way every other claim in that document is
    recorded.
 
+## Specify a discriminator, not just a shape
+
+When you write down what evidence a piece of work must produce, specify at
+least one component the specification itself cannot supply. Otherwise the
+specification has published its own answer key, and a transcript satisfying
+it is indistinguishable from a transcript reciting it.
+
+For anything in this repo that records a live run, the concrete form of
+that rule is: capture at least one thing that could not have been
+predicted in advance. Any of these is sufficient, more than one is better:
+
+- the command's own wall-clock latency (a real round trip cannot be zero)
+- an absolute timestamp from the machine's own clock at the moment of run
+- the exact `git rev-parse HEAD` of the working tree at run time
+- a server-generated correlation id, if any code path surfaces one
+
+**Worked example.** WYZR-14's criterion 9 required an end-to-end
+before/after CLI run to prove the errorCode-1000 decode fix, and then
+stated the expected output verbatim: `Wyze API returned an error (code
+undefined).` and exit 6. The first before/after pair offered as evidence
+was therefore reconstructable from the ticket text alone and proved
+nothing about execution. There was no discriminator available inside the
+output either: the auth host's `requestId` (step 2 above) is one-time per
+call, but neither the pre-fix generic error nor the post-fix credentials
+message prints it. The pair was re-run, and the second one carried
+timestamps and two independently-verifiable commit SHAs in two separate
+worktrees. The defect was in the instrument — the acceptance criterion
+itself — not in anyone's claim, which is what made it worth recording
+here.
+
+Surfacing the auth host's `requestId` in an error message would make this
+class of check self-verifying, and would be independently useful for a
+support trail — but that's a `src/` change with its own consequences (see
+the redaction constraints above), and is deliberately not done as a side
+effect of writing this section. File it if you think it should happen.
+
 ## What this procedure cannot do, and what actually needed a real account
 
 This procedure — junk credentials against a real host — can only ever
