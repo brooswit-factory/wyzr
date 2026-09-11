@@ -6,6 +6,44 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- The post-cycle recovery engine and `wyzr recovery status` (WYZR-18/WYZR-25)
+  — a read-only command answering "did that power cycle actually work?" with
+  evidence, not assumption. **Ships no plug-switching capability at all, and
+  reads no plug-liveness signal whatsoever** — no import path exists from any
+  file here to a write verb, proved by `test/unit/recovery-imports.test.ts`
+  walking the transitive import closure (watched RED first).
+  - `src/recovery.ts`: the pure, injectable-boundary engine —
+    `evaluateRecovery()` takes `--since` (the power-off instant) plus
+    already-gathered observations and produces a `RecoveryVerdict`
+    (`RECOVERED`/`NOT_RECOVERED`/`FLEET_HALF_RESTORED`/`INCONCLUSIVE`/
+    `UNCONFIGURED`) plus its full evidence trail. Five checks, each reporting
+    independently: reachability (ssh/tunnel-ping, reused from WYZR-16),
+    reboot (a skew-safe DURATION comparison — the box's own uptime, read from
+    its monotonic clock, against elapsed time since `--since`, never a
+    cross-machine wall-clock instant comparison), daemon health (unit AND
+    scope both required, four distinguishable outcomes including
+    "pointed-at-nothing" for a wrong scope), outside-instrument resumption
+    (Jira/GitHub activity reused from WYZR-16, counting only activity AFTER
+    the cut), and a fleet-pane audit for the herdr bare-`claude --resume`
+    restore trap (detects and reports only — the fix is WYZR-21). A
+    `PlugLivenessReading` type mirrors `ControlPlaneReading`'s
+    `@ts-expect-error`-pinned structural exclusion, verified the same way
+    (directives removed, `TS2739` observed, restored).
+  - `src/recovery-probes.ts`/`recovery-probes-real.ts`/`recovery-probes-fake.ts`:
+    the three genuinely new probes (uptime via `/proc/uptime`, daemon via
+    `systemctl show`, fleet audit via `ps`), composed alongside
+    `WedgeProbes` (reused verbatim, never widened — it is a published
+    interface WYZR-19 depends on) rather than extending it. The fleet-audit
+    classifier returns COUNTS ONLY — no raw argv, pid, or session id can
+    reach any output field on any path, including every error path.
+  - `src/recovery-runner.ts`/`recovery-config.ts`: real wall-clock and every
+    probe call live here, never in the pure engine; config reuses WYZR-16's
+    `WYZR_WEDGE_*` env vars for the shared probes, and the three new probes
+    reuse the same ssh host rather than introducing a second one.
+  - `src/cli-recovery.ts`: `wyzr recovery status --since <ISO-8601
+    timestamp>`, human and `--json`, allowlist-projected.
+  - `src/errors.ts`: exit codes 13/14/15/16 appended (RECOVERED reuses `0`).
+
 - The wedge-proof engine and `wyzr wedge status` (WYZR-17) — decides
   whether the destructive power-cycle verb (a later story, `wyzr cycle`)
   is ever allowed to run, plus a read-only command that shows the

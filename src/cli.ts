@@ -17,6 +17,7 @@
 import { runDevicesList } from "./cli-devices.ts";
 import { runPlugStatus, runPlugWrite } from "./cli-plug.ts";
 import { defaultWedgeStatusDeps, runWedgeStatus, type WedgeStatusDeps } from "./cli-wedge.ts";
+import { defaultRecoveryStatusDeps, runRecoveryStatus, type RecoveryStatusDeps } from "./cli-recovery.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
 import { printError, printHuman, printJsonError } from "./output.ts";
@@ -160,6 +161,53 @@ export async function dispatchWedge(
   return runWedgeStatus(deps, json);
 }
 
+/** `recovery`'s own subcommand routing: only `status` exists, and it is
+ * READ-ONLY — see src/cli-recovery.ts's own top comment for why there is no
+ * import path from it to a write verb, or to the Wyze plug/transport
+ * modules at all, structurally, not by convention.
+ *
+ * `--since <ISO-8601 timestamp>` is REQUIRED, with no default — a guess
+ * here ("now minus something") would silently change the verdict, per the
+ * ticket. It is parsed out of `rest` here (rather than added to
+ * src/cli.ts's global `parseArgs()`) because it is specific to this one
+ * command, the same way `<device>` is specific to `plug`. Missing,
+ * unparseable, or future-dated is a Usage error — never a verdict. */
+export async function dispatchRecovery(
+  rest: string[],
+  json: boolean,
+  deps: RecoveryStatusDeps = defaultRecoveryStatusDeps,
+  now?: number,
+): Promise<number> {
+  const usage = "Usage: wyzr recovery status --since <ISO-8601 timestamp> [--json]";
+  const sinceIndex = rest.indexOf("--since");
+  const filteredRest = [...rest];
+  let sinceValue: string | undefined;
+  if (sinceIndex !== -1) {
+    sinceValue = rest[sinceIndex + 1];
+    filteredRest.splice(sinceIndex, 2);
+  }
+
+  const [sub] = filteredRest;
+  if (sub !== "status") {
+    throw new CliError(sub ? `Unknown recovery subcommand: ${sub}` : usage, ExitCode.Usage);
+  }
+  if (!sinceValue) {
+    throw new CliError(`${usage} — --since is required; there is no default`, ExitCode.Usage);
+  }
+  const sinceMs = Date.parse(sinceValue);
+  if (Number.isNaN(sinceMs)) {
+    throw new CliError(`${usage} — could not parse --since as an ISO-8601 timestamp: ${JSON.stringify(sinceValue)}`, ExitCode.Usage);
+  }
+  const nowMs = now ?? Date.now();
+  if (sinceMs > nowMs) {
+    throw new CliError(
+      `${usage} — --since (${new Date(sinceMs).toISOString()}) is in the future; this must be the moment power was actually cut, never a guess`,
+      ExitCode.Usage,
+    );
+  }
+  return runRecoveryStatus(deps, json, sinceMs, now);
+}
+
 const defaultDispatch: Dispatch = async (command, rest, opts) => {
   if (command === "devices") {
     return dispatchDevices(rest, opts.json);
@@ -169,6 +217,9 @@ const defaultDispatch: Dispatch = async (command, rest, opts) => {
   }
   if (command === "wedge") {
     return dispatchWedge(rest, opts.json);
+  }
+  if (command === "recovery") {
+    return dispatchRecovery(rest, opts.json);
   }
   throw new CliError(`Unknown command: ${command}`, ExitCode.Usage);
 };
@@ -191,7 +242,9 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "  plug status <device>   Report whether a plug is on/off, and reachable.\n" +
         "  plug on <device>       Turn a plug on (read back to confirm).\n" +
         "  plug off <device>      Turn a plug off (read back to confirm).\n" +
-        "  wedge status           Report the wedge-proof engine's full evidence trail and verdict (read-only).",
+        "  wedge status           Report the wedge-proof engine's full evidence trail and verdict (read-only).\n" +
+        "  recovery status --since <ISO-8601 timestamp>\n" +
+        "                          Report post-cycle recovery evidence and verdict (read-only).",
     );
     return ExitCode.Ok;
   }

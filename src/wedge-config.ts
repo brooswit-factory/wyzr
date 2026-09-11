@@ -108,7 +108,11 @@ export interface WedgeConfigEnv {
 
 const systemEnv: Record<string, string | undefined> = process.env as unknown as Record<string, string | undefined>;
 
-function positiveIntMs(value: string | undefined, fallback: number): number {
+// Exported (WYZR-25) so src/recovery-config.ts can reuse this parsing rule
+// rather than duplicating it — this module is "internal, free to change"
+// per README's published-interface section, so widening its export surface
+// for another module in this repo to reuse is safe.
+export function positiveIntMs(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;

@@ -42,7 +42,7 @@ import {
   type WedgeConfig,
 } from "./wedge-config.ts";
 
-type Attempt<T> = { kind: "ok"; value: T } | { kind: "timeout" } | { kind: "error"; message: string };
+export type Attempt<T> = { kind: "ok"; value: T } | { kind: "timeout" } | { kind: "error"; message: string };
 
 /**
  * Races `run()` against `timeoutMs`, enforced HERE rather than trusted to
@@ -54,7 +54,10 @@ type Attempt<T> = { kind: "ok"; value: T } | { kind: "timeout" } | { kind: "erro
  * take down the whole evidence-gathering run (see runWedgeCheck() below,
  * which runs every probe concurrently via Promise.all).
  */
-async function attempt<T>(run: () => Promise<T>, timeoutMs: number): Promise<Attempt<T>> {
+// Exported (WYZR-25) so src/recovery-runner.ts can reuse this same
+// race-against-a-timeout wrapper rather than duplicating it — this helper is
+// "internal, free to change" per README's published-interface section.
+export async function attempt<T>(run: () => Promise<T>, timeoutMs: number): Promise<Attempt<T>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<Attempt<T>>((resolve) => {
     timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
