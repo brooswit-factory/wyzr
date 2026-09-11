@@ -351,10 +351,30 @@ function parseSafePlug(obj: Record<string, unknown>, path: string): SafePlugTarg
   return { ...fields, [SAFE_PLUG_BRAND]: true };
 }
 
-/** "The same device": an identical `mac` AND an identical `subDeviceId`
- * (or both absent), after trim/lowercase normalisation — the same
- * case/whitespace-insensitive comparison this repo's
- * src/cycle-wrong-box.ts already uses for its own identity comparisons.
+/** "The same device": an identical `mac`, UNLESS both `subDeviceId`s are
+ * non-null and DIFFER (two sibling outlets under one physical device —
+ * the one same-mac case that genuinely names two distinct switchable
+ * things). Comparison is trim/lowercase-normalised, same
+ * case/whitespace-insensitive rule this repo's src/cycle-wrong-box.ts
+ * already uses for its own identity comparisons.
+ *
+ * REVIEW FINDING 1 (WYZR-28): the first version of this function compared
+ * `subDeviceId` for EQUALITY, which let a PARENT/CHILD pair — `(mac, null)`
+ * (the parent device itself, per `PlugTargetFields.subDeviceId`'s own
+ * comment: "this plug target IS the addressable device") paired with
+ * `(mac, "sub-1")` (one outlet inside that SAME device) — load without
+ * refusing, on the theory that `null !== "sub-1"` means "different." That
+ * is wrong: those two are not peers, one CONTAINS the other, and whether
+ * writing P3 to the parent also affects its sub-devices is NOT something
+ * this repo has measured. A rehearsal whose target might contain the
+ * fleet box's own outlet is exactly the outcome this check exists to
+ * prevent — so a parent/child pair refuses BECAUSE the containment
+ * relationship is unmeasured, not because it is known to be dangerous.
+ * Only two DISTINCT, non-null sub-device ids under the same mac (true
+ * siblings, neither containing the other) are treated as different
+ * devices; every other same-mac pairing (both null; one null, one not;
+ * identical non-null ids) counts as the same device.
+ *
  * WHAT THIS CANNOT SEE, stated explicitly per the ticket's own
  * requirement: two DIFFERENT mac addresses that happen to name the same
  * physical device (an operator data-entry duplicate), or a sub-device
@@ -366,19 +386,20 @@ function normalizeIdentityField(s: string | null): string | null {
 }
 
 function samePlugIdentity(a: PlugTargetFields, b: PlugTargetFields): boolean {
-  return (
-    normalizeIdentityField(a.mac) === normalizeIdentityField(b.mac) &&
-    normalizeIdentityField(a.subDeviceId) === normalizeIdentityField(b.subDeviceId)
-  );
+  if (normalizeIdentityField(a.mac) !== normalizeIdentityField(b.mac)) return false;
+  const subA = normalizeIdentityField(a.subDeviceId);
+  const subB = normalizeIdentityField(b.subDeviceId);
+  const distinctSiblings = subA !== null && subB !== null && subA !== subB;
+  return !distinctSiblings;
 }
 
 function refuseIfPlugsConflate(fleetPlug: FleetPlugTarget, safePlug: SafePlugTarget, path: string): void {
   if (samePlugIdentity(fleetPlug, safePlug)) {
     throw configError(
-      `Config file at ${path} configures "fleetPlug" and "safePlug" as the SAME device (identical mac and ` +
-        "sub-device id, after normalisation) — refusing: a safe-plug write rehearsal must never be able to reach " +
-        "the fleet plug. Field names only — see this module's own samePlugIdentity() comment for exactly what " +
-        '"the same device" means here and what this check cannot see.',
+      `Config file at ${path} configures "fleetPlug" and "safePlug" as the SAME device (identical mac, and not ` +
+        "two distinct, non-null sub-device ids, after normalisation) — refusing: a safe-plug write rehearsal must " +
+        "never be able to reach the fleet plug. Field names only — see this module's own samePlugIdentity() " +
+        'comment for exactly what "the same device" means here and what this check cannot see.',
       "config_plug_conflation",
     );
   }

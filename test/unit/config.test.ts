@@ -19,6 +19,7 @@ import {
 } from "../../src/config.ts";
 import { CliError, ExitCode } from "../../src/errors.ts";
 import { REDACTED, redact, resetSecretsForTesting } from "../../src/redact.ts";
+import { MANAGER_INTERNET_DEPENDENCY } from "../../src/wedge-config.ts";
 
 const FLEET_PLUG = { mac: "AA:BB:CC:DD:EE:01", model: "WLPP1CFH", name: "fixture-fleet-plug" };
 const SAFE_PLUG = { mac: "11:22:33:44:55:02", model: "WLPPO", name: "fixture-safe-plug", subDeviceId: "11:22:33:44:55:02-SUB1" };
@@ -507,6 +508,39 @@ describe("loadWyzrConfig — fleetPlug and safePlug resolving to the same device
     expect(() => loadWyzrConfig(env)).not.toThrow();
   });
 
+  // REVIEW FINDING 1 (WYZR-28, PR #22): identical mac, safePlug has NO
+  // subDeviceId (the PARENT device itself — see PlugTargetFields.subDeviceId's
+  // own comment) while fleetPlug names ONE SUB-DEVICE inside that same
+  // physical device. These are not two peers; the safe plug WOULD contain
+  // the fleet outlet. Whether writing P3 to the parent also affects its
+  // sub-devices is unmeasured — so this refuses, same as any other same-mac
+  // pairing that is not two distinct, non-null sibling sub-device ids.
+  test("named test 8 (parent-as-safe): identical mac, safePlug is the PARENT device (no subDeviceId) and fleetPlug names a sub-device inside it -> refused", async () => {
+    const base = await makeBase();
+    const sharedMac = "AA:BB:CC:DD:EE:FF";
+    const { env } = await fixture(base, {
+      ...VALID_MINIMAL,
+      fleetPlug: { mac: sharedMac, model: "WLPPO", name: "fleet", subDeviceId: "sub-1" },
+      safePlug: { mac: sharedMac, model: "WLPPO", name: "safe" },
+    });
+
+    const err = expectCliError(() => loadWyzrConfig(env));
+    expect(err.reason).toBe("config_plug_conflation");
+  });
+
+  test("named test 8 (parent-as-fleet): identical mac, fleetPlug is the PARENT device (no subDeviceId) and safePlug names a sub-device inside it -> refused", async () => {
+    const base = await makeBase();
+    const sharedMac = "AA:BB:CC:DD:EE:FF";
+    const { env } = await fixture(base, {
+      ...VALID_MINIMAL,
+      fleetPlug: { mac: sharedMac, model: "WLPPO", name: "fleet" },
+      safePlug: { mac: sharedMac, model: "WLPPO", name: "safe", subDeviceId: "sub-2" },
+    });
+
+    const err = expectCliError(() => loadWyzrConfig(env));
+    expect(err.reason).toBe("config_plug_conflation");
+  });
+
   test("mac comparison is case/whitespace-insensitive: differently-cased/spaced identical macs still conflate", async () => {
     const base = await makeBase();
     const { env } = await fixture(base, {
@@ -761,6 +795,49 @@ describe("loadWyzrConfig — suspectBox.host is the ONE value feeding ssh, the w
     expect(config.recovery.daemon).toEqual({ host: VALID_MINIMAL.suspectBox.host, unit: "example.service", scope: "system", timeoutMs: 5000 });
     expect(config.recovery.fleet?.processMatch).toBe("claude");
     expect(config.recovery.fleet?.expectedFlags).toEqual(["--mcp-config", "--permission-mode"]);
+  });
+});
+
+// ---------------------------------------------------------------------
+// REVIEW FINDING 2 (WYZR-28, PR #22): the manager-internet dependency
+// wiring (jira.dependsOn/github.dependsOn/localConnectivity.confirms) was
+// carried over correctly from the removed env loader but had no pin
+// asserting it THROUGH loadWyzrConfig() — a mutation removing it left the
+// whole suite green. src/wedge.ts's evaluateWedge() treats an EMPTY shared-
+// dependency set as unconditionally "independent", so losing this wiring
+// would silently let two instruments silenced by one manager-internet
+// blip count as independent evidence toward a PROVEN wedge verdict (the
+// README's own "independence trap") — exactly the class of vacuous-
+// clearing hole this ticket's empty-set fix is about, landing on a
+// property neither the ticket nor the follow-up comment named directly.
+// ---------------------------------------------------------------------
+
+describe("loadWyzrConfig — the manager-internet dependency wiring survives the rewrite (pinned through the real loader, not just by inspection)", () => {
+  test("a configured jira instrument declares manager-internet in its dependsOn", async () => {
+    const base = await makeBase();
+    const { env } = await fixture(base, {
+      ...VALID_MINIMAL,
+      jira: { baseUrl: "https://example.invalid", authHeader: "Basic fake" },
+    });
+
+    const config = loadWyzrConfig(env);
+    expect(config.wedge.jira?.dependsOn).toContain(MANAGER_INTERNET_DEPENDENCY);
+  });
+
+  test("a configured github instrument declares manager-internet in its dependsOn", async () => {
+    const base = await makeBase();
+    const { env } = await fixture(base, { ...VALID_MINIMAL, github: { owner: "example-org" } });
+
+    const config = loadWyzrConfig(env);
+    expect(config.wedge.github?.dependsOn).toContain(MANAGER_INTERNET_DEPENDENCY);
+  });
+
+  test("localConnectivity.confirms always contains manager-internet, with or without an override", async () => {
+    const base = await makeBase();
+    const { env } = await fixture(base, { ...VALID_MINIMAL, localConnectivity: { target: "9.9.9.9" } });
+
+    const config = loadWyzrConfig(env);
+    expect(config.wedge.localConnectivity.confirms).toContain(MANAGER_INTERNET_DEPENDENCY);
   });
 });
 
