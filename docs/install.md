@@ -28,18 +28,40 @@ wyzr --help
 Use the manager box's own XDG configuration base (`$XDG_CONFIG_HOME` when set,
 otherwise its user's standard configuration directory). Create its `wyzr`
 directory with mode `0700`; create `config.json` and `credentials.json` inside
-with mode `0600`. Failure condition: before continuing, stop if either file is
-absent, still contains any example value, or the directory/file modes are
-broader than those stated. `config_invalid` (exit 26) or `credentials_invalid`
-(exit 3) names the affected field or permission without printing its value.
+with mode `0600`. Failure condition before running these commands: if the
+checkout is not the reviewed artifact chosen above, or if `$XDG_CONFIG_HOME`/
+`$HOME` does not identify the manager user's own configuration base, stop.
 
 ```sh
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr"
 chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr"
+test ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/config.json" || exit 1
 cp docs/config.example.json "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/config.json"
 chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/config.json"
+test ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/credentials.json" || exit 1
+install -m 600 /dev/null "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/credentials.json"
+```
+
+Failure condition before editing: do not put a secret in shell history or copy
+any value from a ticket, this repository, or another machine's environment.
+Use an editor on the manager box to replace **every** example value in
+`config.json` from that box's authoritative inventory, then populate
+`credentials.json` using README's “Credentials → File shape” schema and the
+human-provisioned values:
+
+```sh
+"${EDITOR:?set EDITOR to your manager-box editor}" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/config.json"
+"${EDITOR:?set EDITOR to your manager-box editor}" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/credentials.json"
 chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/wyzr/credentials.json"
 ```
+
+Failure condition before preflight: stop if either file is absent or empty, if
+`config.json` still contains any example value, if `credentials.json` lacks any
+required field from README's schema, or if the directory/file modes are broader
+than those stated. `config_invalid` (exit 26) or `credentials_invalid` (exit 3)
+names the affected field or permission without printing its value.
 
 Failure condition before provisioning: if any value would need to be copied
 from a ticket, this repository, or another machine's environment, stop and find
