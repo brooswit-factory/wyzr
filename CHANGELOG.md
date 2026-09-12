@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Manager-box installation documentation and a 3am emergency operator
+  runbook, including permissioned configuration, provisioning/SSO caveats,
+  doctor preflight, all cycle refusal/outcome codes, the bounded force path,
+  independent ssh + `who -b` recovery proof, and hand restoration for a
+  stranded plug. README live-device claims now distinguish the 2026-09-10
+  hand-run, the 2026-09-11 read acceptance, and the still-unrun write
+  rehearsal instead of describing all device paths as unverified.
+
 - The single, file-backed configuration surface (WYZR-20/WYZR-28):
   `src/config.ts`'s `loadWyzrConfig()` replaces the three provisional
   env-var loaders (`loadWedgeConfigFromEnv`/`loadRecoveryConfigFromEnv`/

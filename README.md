@@ -860,15 +860,13 @@ above). `--json` mode's error path is the same documented
 `{"error": {...}}` shape as every other command — no separate JSON error
 mechanism was invented.
 
-### This command has never been exercised against a real Wyze account or device
+### Live acceptance: exercised through this code on 2026-09-11
 
-Every path `wyzr devices list` takes — login, `getObjectList()`, and this
-command's own field allowlist, plug-recognition list, and connectivity-field
-guess — is, like everything else in this repo, unverified against reality.
-A green test suite here proves this code matches this project's own belief
-about the Wyze API's shape; it **cannot** prove that belief is correct. See
-"Live-device coverage" immediately below for the full statement this
-applies to.
+On the manager box, a human ran `devices list` and `devices list --json`
+against the real account: exit 0 and sixteen rows matching an earlier hand
+measurement mac-for-mac. This proves the login, envelope/body decode and these
+device fields through this code for that one account and date. It is not broad
+hardware coverage and does not exercise any write.
 
 ## `wyzr plug status|on|off`
 
@@ -1112,29 +1110,37 @@ tagged `PROVENANCE: ASSUMED` in its own doc comment (see "The fake's
 responses are tiered by provenance" above) — constructed from the
 finding's description of the shape, never a capture of real Wyze traffic.
 
-### This command has never been exercised against a real Wyze account or device
+### Read accepted live; writes remain unexercised
 
-`plug status`, `plug on`, and `plug off` — the P3/P5 decode rules, the
-`get_property_list`/`set_property` request and response shapes, and the
-device-resolution logic layered on `devices list`'s own unverified field
-names — are, like everything else in this repo, unverified against
-reality. A green suite here proves this code matches this project's own
-belief about the Wyze API's shape; it **cannot** prove that belief is
-correct. Proving it would require a provisioned Wyze account with a real
-plug and a single live run of all three verbs, which would close: whether
-`P3`/`P5` really are present and int-encoded on this account's actual
-hardware/firmware generation (finding §Q4's own open "WHAT IS P7?"
-caveat), the real `get_property_list`/`set_property` request and response
-field names (finding's explicit unknown #1), and whether a `set_property`
-write is ever reflected fast enough for a single immediate read-back to
-observe it at all (closing decision (D2)'s propagation-lag question in
-the other direction, for the first time). See "Live-device coverage"
-immediately below for the full statement this applies to.
+On 2026-09-11 a human ran `plug status` through this product on two real
+plugs, exit 0 with correct states. That exercises device resolution,
+`get_property_list`, and P3/P5 decoding end to end for those devices. Neither
+`plug on` nor `plug off` has run through this product; their request shape and
+read-back behavior remain unexercised here.
 
-## Live-device coverage
+## Four claim levels (as of 2026-09-11)
 
-**Nothing in this repo has ever been exercised against a real Wyze
-ACCOUNT or DEVICE, and that remains true after WYZR-15.** What changed:
+1. **Never touched reality.** The wedge probes have never faced an actually
+wedged box, and recovery probes have never faced a real recovering box.
+2. **Exercised by hand once, outside this product (2026-09-10).** A human read,
+cut, restored, and read back a plug, then confirmed the box booted by ssh. This
+proves that plug controls that box and the cut did not brick it. It exercised no
+gate, authorization, verification routine, or repository code. Propagation was
+about three seconds in this one observation (`n=1`), not a latency budget; all
+configured timing defaults are chosen starting points, not measurements.
+3. **Proven through `wyzr`'s own read code (2026-09-11).** `devices list` and
+`plug status` ran against the real account with exit 0: sixteen device rows
+matched an earlier hand measurement mac-for-mac and two plug states were
+correct. Login, auth-envelope decode, device-host body, `get_property_list`
+fields and P3/P5 decoding were exercised end to end. This is dated acceptance,
+not universal hardware coverage.
+4. **Write path: shipped but not run.** No capture-format evidence records an
+executed `rehearse-safe-plug-write`; `plug on`/`plug off` have never run through
+this product. Therefore `cycle`'s off-then-on behavior rests on the unexercised
+half. The rehearsal procedure is shipped in
+`docs/write-rehearsal-procedure.md`, but shipping it is not running it.
+
+Earlier placeholder-credential work still adds a narrower evidence tier:
 WYZR-15 made a HANDFUL of deliberate, manual, placeholder-credentialed
 calls to the real `auth-prod.api.wyze.com` (login) and `api.wyzecam.com`
 (`get_property_list`) hosts — see `docs/wyze-no-credential-probing.md` —
@@ -1143,9 +1149,9 @@ account at all. That is real coverage of those error shapes (now tier
 (a); see `src/wyze-envelope.ts`/`src/wyze-auth-envelope.ts`'s header
 comments) and is the reason `wyzeInvalidCredentialsOrSsoOnlyError()` is
 reachable at all now (see "The errorCode 1000 trap" above). It is NOT
-coverage of anything requiring a real account: no successful login has
-ever been observed (the auth host's SUCCESS/MFA shapes stay tier (d),
-corroborated tier (b) by a source read, never measured); `src/totp.ts`'s
+coverage of anything requiring a real account at the time it was performed.
+The later 2026-09-11 acceptance did observe successful login (but no MFA
+challenge); `src/totp.ts`'s
 math is proven against RFC 6238's own vectors but has never answered a
 real challenge; `src/app-identity.ts`'s minted key has been SENT (as part
 of every probe above) but whether Wyze actually HONORS a value it never
@@ -1154,45 +1160,12 @@ unrelated reason (bad credentials) before that could be distinguished;
 and the token lifetimes and refresh behavior are only as documented in
 the finding, at reduced confidence, never observed directly.
 
-**Neither `wyzr devices list` nor `wyzr plug status|on|off` adds any
-exception to any of this.** `devices list`'s `mac`/`product_model`/
-`nickname` field names, its `conn_state` online/offline-inference field
-name, and its `KNOWN_PLUG_MODELS` plug-model list are this project's own
-inference (tier (d) at best), never confirmed against a real
-`get_object_list` response — the finding's explicit unknown #1 is that no
-such response has ever been captured in any tier (a)/(b) source. Expect,
-specifically: every device's `state` to read `"unknown"` until
-`conn_state`'s field name is corrected against a live account; a real plug
-with an unrecognized model code to show `isPlug: false` until
-`KNOWN_PLUG_MODELS` is corrected; and `mac`/`model` to read `null` if the
-real field names differ from `mac`/`product_model`. None of these are bugs
-in the sense of failing this repo's own test suite — the suite tests this
-code against its own synthetic fixtures, which is exactly the limitation
-this section exists to name.
+The 2026-09-11 read acceptance supersedes the older device-list and
+property-read uncertainty: the observed account confirmed the projected device
+fields, `get_property_list` request/response fields, and P3/P5 decoding. It did
+not test every model, MFA, token refresh, `set_property`, or write propagation.
 
-**`plug status`, `plug on`, and `plug off` carry the same unverified
-status, one layer further in.** `src/plug.ts`'s `get_property_list`/
-`set_property` request field names (`target_pid_list`, `mac`, `model`,
-`pid`, `value`) and its assumed response shape (`data.property_list` as a
-list of `{pid, value}` entries) are this project's own inference by
-analogy with `get_object_list`'s own `device_list` wrapper — never
-confirmed against a real response, because none exists in any tier (a)/(b)
-source (finding's explicit unknown #1, again). `P3`/`P5` themselves are
-tier (b) — read from the actively-maintained `wyze-sdk`'s own source — but
-whether THIS project's specific plug hardware/firmware exposes exactly
-that PID set is unverified (finding §Q4's own open "WHAT IS P7?" caveat on
-its reference source). And decision (D2)'s propagation-lag question — does
-a real `set_property` write show up in an immediate read-back, or does it
-take measurable time to propagate — is **unverified in both directions**:
-this repo has never observed either a real confirmation or a real
-contradiction. A provisioned account with a real plug, and a single live
-run of all three verbs, would close: whether the request/response field
-names above are right, whether this hardware's PID set matches, and
-whether one immediate read-back is fast enough to typically observe a
-write at all.
-
-Every path in this repo — including `wyzr devices list` and
-`wyzr plug status|on|off` end to end — is exercisable against
+Every path in this repo is exercisable against
 `FakeWyzeTransport` with no credential present at all — that is the
 design, not a limitation — but a green suite here proves this code matches
 this repo's own belief about the Wyze API, and **cannot** tell you that
