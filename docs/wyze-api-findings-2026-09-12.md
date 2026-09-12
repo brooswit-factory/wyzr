@@ -143,7 +143,9 @@ and 2026-09-10 RELAYED-measured]
   the untouched branch point. [2026-09-12]
 - **Scope:** compare the branch against `origin/WYZR-34`. Failure: any changed
   file outside this new dated document, especially under `src/` or `test/`,
-  or any byte change to the 2026-09-02 finding. To be rerun after commit.
+  or any byte change to the 2026-09-02 finding. Result after commit: the diff
+  contains only this new dated document; the `src/` and `test/` diff is empty;
+  and the 2026-09-02 finding is byte-unchanged. [2026-09-12]
 - **No-credential rule:** no probe was run. Failure: any network request to a
   Wyze API host, acquisition/use of credentials, or device toggle. Result:
   none. [2026-09-12]
@@ -152,4 +154,3 @@ and 2026-09-10 RELAYED-measured]
   its overlapping non-doc files. Result: WYZR-20 changes 48 files, including
   config/doctor/capture work, but this task edits only this new document, so
   overlap is nil. [repository refs read 2026-09-12, tier (b)]
-
