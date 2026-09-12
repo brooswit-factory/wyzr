@@ -25,9 +25,10 @@ import { CliError, ExitCode } from "./errors.ts";
 /** Bump this whenever a field is added, removed, renamed, or changes
  * meaning — the only versioning promise this contract makes. See README's
  * "--json contract" section. */
-export const DEVICE_LIST_SCHEMA_VERSION = 1;
+export const DEVICE_LIST_SCHEMA_VERSION = 2;
 
 export type DeviceState = "online" | "offline" | "unknown";
+export type PlugKind = "switchable-plug" | "outdoor-parent" | "unknown";
 
 export interface DeviceRecord {
   /** The identifier device-control calls key on, per the finding's Q4
@@ -42,15 +43,15 @@ export interface DeviceRecord {
   /** `nickname`, or a clear placeholder when missing/malformed — never
    * blank, so a row is never silently unreadable. */
   name: string;
-  /** `true` only when `model` matched this project's own KNOWN_PLUG_MODELS
-   * set. This set is NOT sourced from the finding (which documents no
-   * model-code table at all) and is known to be incomplete — see
-   * KNOWN_PLUG_MODELS's own comment. `false` means "not recognized as a
-   * known plug model," NOT "confirmed not a plug" — a real plug with an
-   * unrecognized model code would also read `false`. Consumers must not
-   * treat `false` as proof of anything; it is why this command marks
-   * rather than filters (see README / PR body). */
+  /** `true` only for classifyPlugModel's `switchable-plug` result. The
+   * rule is incomplete and advisory; `false` means either an OutdoorPlug
+   * parent or an unknown model, never "confirmed not a plug." */
   isPlug: boolean;
+  /** Advisory model classification. `outdoor-parent` is deliberately not
+   * `isPlug`: RELAYED evidence says the WLPPO parent has addressable `-SUB`
+   * children, but how those children appear in `get_object_list` is
+   * UNOBSERVED. No control path consumes this field or `isPlug`. */
+  plugKind: PlugKind;
   /** Derived from `conn_state` (this project's own inference of where
    * get_object_list signals connectivity — distinct from the P5 property,
    * which is a separate get_property_list call this ticket's scope
@@ -67,12 +68,25 @@ export interface DeviceRecord {
 }
 
 /**
- * This project's own inference (tier (d), corroborated only at tier (c) at
- * best) of which `product_model` codes name a Wyze plug —
- * docs/wyze-api-findings-2026-09-02.md documents no model-code table at
- * all, so this is NOT a confirmed contract. `"WLPP1"` matches the value
- * WYZR-11's own fake response already uses for its synthetic plug
- * (src/transport-fake.ts's fakeGetObjectListEnvelope()).
+ * One readable model-classification rule, advisory only:
+ * - `WLPP1*` is a switchable plug family. Prefix matching accepts the
+ *   RELAYED `WLPP1CFH` model and preserves recognition if that family gains
+ *   another suffix. It could misclassify an unknown future non-plug that
+ *   reuses the prefix; importantly, this classification gates no write.
+ * - exact `WLPPO` is an OutdoorPlug parent, not an addressable outlet row.
+ * - everything else remains visibly unknown.
+ *
+ * PROVENANCE: ASSUMED (tier (d)) for `WLPP1`: it came only from WYZR-11's
+ * own synthetic fake, so its original exact-match belief was circular and
+ * is now contradicted by the RELAYED `WLPP1CFH` observation.
+ * PROVENANCE: RELAYED, operator, real-account model strings `WLPP1CFH` and
+ * `WLPPO` observed during the 2026-09-10 hand measurement and 2026-09-11
+ * run; no raw response was captured.
+ *
+ * RELAYED evidence also says WLPPO has addressable `-SUB` children. Their
+ * device-list representation is UNOBSERVED: whether they are separate
+ * rows, how a parent is named, and their `product_model` are all unknown.
+ * This rule therefore makes no invented claim about a child shape.
  *
  * Deliberately treated as INCOMPLETE, never as a denylist's mirror image:
  * an unrecognized model sets `isPlug: false` but the row is still shown
@@ -81,7 +95,11 @@ export interface DeviceRecord {
  * hiding an operator's actual plug, which is unacceptable for a tool whose
  * whole purpose is finding the plug that reboots a wedged box.
  */
-const KNOWN_PLUG_MODELS = new Set<string>(["WLPP1"]);
+function classifyPlugModel(model: string | null): PlugKind {
+  if (model?.startsWith("WLPP1")) return "switchable-plug";
+  if (model === "WLPPO") return "outdoor-parent";
+  return "unknown";
+}
 
 function describeType(value: unknown): string {
   if (value === undefined) return "undefined";
@@ -127,6 +145,7 @@ function projectDevice(raw: unknown): DeviceRecord {
       model: null,
       name: "(malformed device entry)",
       isPlug: false,
+      plugKind: "unknown",
       state: "unknown",
       note: fieldNote("(device entry)", "an object", raw),
     };
@@ -137,12 +156,14 @@ function projectDevice(raw: unknown): DeviceRecord {
   const model = stringField(obj, "product_model", notes);
   const nickname = stringField(obj, "nickname", notes);
   const state = classifyState(obj, notes);
+  const plugKind = classifyPlugModel(model);
 
   return {
     mac,
     model,
     name: nickname ?? "(unnamed device)",
-    isPlug: model !== null && KNOWN_PLUG_MODELS.has(model),
+    isPlug: plugKind === "switchable-plug",
+    plugKind,
     state,
     note: notes.length > 0 ? notes.join("; ") : null,
   };
@@ -188,7 +209,12 @@ export function projectDeviceList(raw: unknown): DeviceRecord[] {
 }
 
 function formatDeviceLine(device: DeviceRecord): string {
-  const marker = device.isPlug ? "[PLUG]" : "[?]   ";
+  const marker =
+    device.plugKind === "switchable-plug"
+      ? "[PLUG]  "
+      : device.plugKind === "outdoor-parent"
+        ? "[PARENT]"
+        : "[?]     ";
   const mac = device.mac ?? "(no identifier)";
   const model = device.model ?? "(unknown model)";
   const suffix = device.note ? "  (partial data — see --json for details)" : "";
@@ -196,7 +222,8 @@ function formatDeviceLine(device: DeviceRecord): string {
 }
 
 /** Human-readable rendering — every device is listed (never filtered),
- * marked `[PLUG]` or `[?]` per `isPlug`. See KNOWN_PLUG_MODELS's comment
+ * marked `[PLUG]`, `[PARENT]`, or `[?]` from the same `plugKind`
+ * classification that derives `isPlug`. See classifyPlugModel's comment
  * for why marking, not filtering, is this command's design. */
 export function formatDeviceListHuman(devices: DeviceRecord[]): string {
   if (devices.length === 0) {
