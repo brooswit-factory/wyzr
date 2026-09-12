@@ -19,7 +19,24 @@ async function expectCliError(fn: () => unknown): Promise<CliError> {
 
 describe("DEVICE_LIST_SCHEMA_VERSION", () => {
   test("is a stable, documented positive integer", () => {
-    expect(DEVICE_LIST_SCHEMA_VERSION).toBe(1);
+    expect(DEVICE_LIST_SCHEMA_VERSION).toBe(2);
+  });
+});
+
+describe("relayed plug models render honest human markers (WYZR-39, run red-first)", () => {
+  test("WLPP1CFH is a switchable plug, WLPPO is only the OutdoorPlug parent, and an unknown stays unknown", () => {
+    const devices = projectDeviceList({
+      device_list: [
+        { mac: "m1", product_model: "WLPP1CFH", nickname: "Fleet plug fixture", conn_state: 1 },
+        { mac: "m2", product_model: "WLPPO", nickname: "OutdoorPlug parent fixture", conn_state: 1 },
+        { mac: "m3", product_model: "UNRECOGNIZED_FIXTURE", nickname: "Unknown fixture", conn_state: 1 },
+      ],
+    });
+
+    const lines = formatDeviceListHuman(devices).split("\n");
+    expect(lines[0]).toStartWith("[PLUG]");
+    expect(lines[1]).toStartWith("[PARENT]");
+    expect(lines[2]).toStartWith("[?]");
   });
 });
 
@@ -32,7 +49,7 @@ describe("projectDeviceList — happy path", () => {
     });
 
     expect(devices).toEqual([
-      { mac: "FAKE0000MAC0", model: "WLPP1", name: "Garage Plug", isPlug: true, state: "online", note: null },
+      { mac: "FAKE0000MAC0", model: "WLPP1", name: "Garage Plug", isPlug: true, plugKind: "switchable-plug", state: "online", note: null },
     ]);
   });
 
@@ -171,7 +188,7 @@ describe("projectDeviceList — allowlist, not denylist (run red-first)", () => 
     const serialized = JSON.stringify(devices);
     expect(serialized).not.toContain("should-never-reach-output");
     expect(Object.keys(devices[0] as unknown as Record<string, unknown>).toSorted()).toEqual(
-      ["isPlug", "mac", "model", "name", "note", "state"].toSorted(),
+      ["isPlug", "mac", "model", "name", "note", "plugKind", "state"].toSorted(),
     );
   });
 });
@@ -216,8 +233,8 @@ describe("formatDeviceListHuman", () => {
 
   test("marks a plug row with [PLUG] and an unrecognized-model row with [?]", () => {
     const devices: DeviceRecord[] = [
-      { mac: "m1", model: "WLPP1", name: "Office Plug", isPlug: true, state: "online", note: null },
-      { mac: "m2", model: "OTHER", name: "Front Cam", isPlug: false, state: "offline", note: null },
+      { mac: "m1", model: "WLPP1", name: "Office Plug", isPlug: true, plugKind: "switchable-plug", state: "online", note: null },
+      { mac: "m2", model: "OTHER", name: "Front Cam", isPlug: false, plugKind: "unknown", state: "offline", note: null },
     ];
     const lines = formatDeviceListHuman(devices).split("\n");
     expect(lines[0]).toContain("[PLUG]");
@@ -230,7 +247,7 @@ describe("formatDeviceListHuman", () => {
 
   test("a null mac/model render as clear placeholders, not the literal string 'null'", () => {
     const devices: DeviceRecord[] = [
-      { mac: null, model: null, name: "(unnamed device)", isPlug: false, state: "unknown", note: "field \"mac\": expected a non-empty string, got undefined" },
+      { mac: null, model: null, name: "(unnamed device)", isPlug: false, plugKind: "unknown", state: "unknown", note: "field \"mac\": expected a non-empty string, got undefined" },
     ];
     const line = formatDeviceListHuman(devices);
     expect(line).not.toContain("null");

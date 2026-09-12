@@ -21,9 +21,10 @@ import { defaultRecoveryStatusDeps, runRecoveryStatus, type RecoveryStatusDeps }
 import { defaultCycleCommandDeps, parseCycleArgs, runCycleCommand, type CycleCommandDeps } from "./cli-cycle.ts";
 import { loadCredentials, type Credentials } from "./credentials.ts";
 import { CliError, ExitCode, ExitCodeName } from "./errors.ts";
-import { printError, printHuman, printJsonError } from "./output.ts";
+import { printError, printHuman, printJsonError, printNotice } from "./output.ts";
 import { RealWyzeTransport } from "./transport-http.ts";
 import type { WyzeTransport } from "./transport.ts";
+import { REAL_DEVICE_WRITE_NOTICE } from "./write-coverage.ts";
 
 export interface ParsedArgs {
   json: boolean;
@@ -138,6 +139,9 @@ export async function dispatchPlug(
   if (!device) {
     throw new CliError(`Usage: wyzr plug ${sub} <device> [--json]`, ExitCode.Usage);
   }
+  if (sub !== "status") {
+    printNotice(REAL_DEVICE_WRITE_NOTICE);
+  }
   const credentials = await deps.loadCredentials();
   const transport = deps.createTransport();
   if (sub === "status") {
@@ -229,6 +233,7 @@ export async function dispatchCycle(
       ExitCode.Usage,
     );
   }
+  printNotice(REAL_DEVICE_WRITE_NOTICE);
   return runCycleCommand(deps, device, json, options);
 }
 
@@ -267,8 +272,8 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "Commands:\n" +
         "  devices list           List the account's devices.\n" +
         "  plug status <device>   Report whether a plug is on/off, and reachable.\n" +
-        "  plug on <device>       Turn a plug on (read back to confirm).\n" +
-        "  plug off <device>      Turn a plug off (read back to confirm).\n" +
+        `  plug on <device>       Turn a plug on (read back to confirm). ${REAL_DEVICE_WRITE_NOTICE}\n` +
+        `  plug off <device>      Turn a plug off (read back to confirm). ${REAL_DEVICE_WRITE_NOTICE}\n` +
         "  wedge status           Report the wedge-proof engine's full evidence trail and verdict (read-only).\n" +
         "  recovery status --since <ISO-8601 timestamp>\n" +
         "                          Report post-cycle recovery evidence and verdict (read-only).\n" +
@@ -276,7 +281,7 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
         "                          Gated power cycle: off, wait, never-give-up on, then a recovery\n" +
         "                          verdict. DESTRUCTIVE. --dry-run is the only way to exercise this\n" +
         "                          verb's judgment without cutting power. See README's \"wyzr cycle\"\n" +
-        "                          section before ever running this for real.",
+        `                          section before ever running this for real. ${REAL_DEVICE_WRITE_NOTICE}`,
     );
     return ExitCode.Ok;
   }

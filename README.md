@@ -733,13 +733,12 @@ its own test in `test/unit/devices.test.ts`.
 
 ### Plugs are marked, not filtered — and why
 
-Every device is listed; a plug is marked `[PLUG]` in human output and
-`isPlug: true` in `--json`, everything else `[?]` / `isPlug: false`.
-**Filtering was deliberately rejected.** `isPlug` is computed against
-`src/devices.ts`'s `KNOWN_PLUG_MODELS` — a small, explicitly-labeled,
-**incomplete** set (currently just `"WLPP1"`, matching the model
-`src/transport-fake.ts`'s own synthetic plug already uses) that is this
-project's own inference (tier (d)), not sourced from
+Every device is listed. The `WLPP1*` family is `[PLUG]` / `isPlug: true`;
+the exact `WLPPO` OutdoorPlug parent is `[PARENT]` / `isPlug: false`; and
+everything else is `[?]` / `isPlug: false`. The accompanying `plugKind`
+field preserves those three states in JSON. **Filtering was deliberately
+rejected.** The classification rule in `src/devices.ts` is explicitly
+**incomplete** and is not sourced from
 `docs/wyze-api-findings-2026-09-02.md`, which documents no model-code table
 at all. A filter-by-default design built on this same incomplete list would
 risk **hiding an operator's actual plug** behind an unrecognized model
@@ -768,13 +767,14 @@ response — that is the honest, most likely outcome, not a bug.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "devices": [
     {
       "mac": "AB12CD34EF56",
       "model": "WLPP1",
       "name": "Garage Plug",
       "isPlug": true,
+      "plugKind": "switchable-plug",
       "state": "online",
       "note": null
     }
@@ -784,12 +784,13 @@ response — that is the honest, most likely outcome, not a bug.
 
 | Field                | Type                                   | Always present? | Meaning                                                                                   |
 | -------------------- | --------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------ |
-| `schemaVersion`      | `number`                                 | yes               | Bump on any field being added, removed, renamed, or changing meaning. A consumer should switch on this, not on which fields happen to exist. Currently `1`. |
+| `schemaVersion`      | `number`                                 | yes               | Bump on any field being added, removed, renamed, or changing meaning. A consumer should switch on this, not on which fields happen to exist. Currently `2`. |
 | `devices`             | `array`                                  | yes               | One entry per device Wyze's account returned, in the order `get_object_list` returned them. Never filtered — see "Plugs are marked, not filtered" above. |
 | `devices[].mac`       | `string` or `null`                       | yes (may be `null`) | The identifier device-control calls key on (paired with `model`), per the finding's Q4 table. `null` means this row's raw `mac` field was missing or not a non-empty string — the row cannot yet be acted on by a later command. |
 | `devices[].model`     | `string` or `null`                       | yes (may be `null`) | The device's `product_model`. `null` on the same malformed-field basis as `mac`. |
 | `devices[].name`      | `string`                                  | yes, never blank  | The device's `nickname`, or the literal placeholder `"(unnamed device)"` (or `"(malformed device entry)"` for a non-object entry) when missing/malformed. |
-| `devices[].isPlug`    | `boolean`                                 | yes               | `true` only if `model` matched this project's own incomplete `KNOWN_PLUG_MODELS` set. `false` means "not recognized," **never** "confirmed not a plug" — see "Plugs are marked, not filtered" above. Do not treat `false` as proof of anything. |
+| `devices[].isPlug`    | `boolean`                                 | yes               | `true` only for the advisory `switchable-plug` classification. `false` also covers OutdoorPlug parents and unknown models, **never** "confirmed not a plug." |
+| `devices[].plugKind`  | `"switchable-plug"` \| `"outdoor-parent"` \| `"unknown"` | yes | The same classification used by the human marker and `isPlug`; it gates no control path. |
 | `devices[].state`     | `"online"` \| `"offline"` \| `"unknown"`  | yes               | See "Online/offline state" above — an explicit, undocumented-by-the-finding inference. Expect `"unknown"` against a real account until corrected. |
 | `devices[].note`      | `string` or `null`                       | yes (usually `null`) | `null` on a clean row. Otherwise names which field(s) were malformed and what type was expected — **never any part of the field's actual value** (see "No error or diagnostic message ever reproduces a field's value" above). |
 
@@ -1107,14 +1108,15 @@ the finding, at reduced confidence, never observed directly.
 **Neither `wyzr devices list` nor `wyzr plug status|on|off` adds any
 exception to any of this.** `devices list`'s `mac`/`product_model`/
 `nickname` field names, its `conn_state` online/offline-inference field
-name, and its `KNOWN_PLUG_MODELS` plug-model list are this project's own
+name, and its model-classification rule are this project's own
 inference (tier (d) at best), never confirmed against a real
 `get_object_list` response — the finding's explicit unknown #1 is that no
 such response has ever been captured in any tier (a)/(b) source. Expect,
 specifically: every device's `state` to read `"unknown"` until
 `conn_state`'s field name is corrected against a live account; a real plug
-with an unrecognized model code to show `isPlug: false` until
-`KNOWN_PLUG_MODELS` is corrected; and `mac`/`model` to read `null` if the
+with an unrecognized model code to show `isPlug: false` / `plugKind:
+"unknown"` until the classification rule is corrected; and `mac`/`model`
+to read `null` if the
 real field names differ from `mac`/`product_model`. None of these are bugs
 in the sense of failing this repo's own test suite — the suite tests this
 code against its own synthetic fixtures, which is exactly the limitation

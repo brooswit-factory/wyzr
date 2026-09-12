@@ -14,6 +14,8 @@ import { CliError, ExitCode } from "../../src/errors.ts";
 import { REDACTED, registerSecret, resetSecretsForTesting } from "../../src/redact.ts";
 import { FakeWyzeTransport } from "../../src/transport-fake.ts";
 import { RealWyzeTransport } from "../../src/transport-http.ts";
+import { defaultCycleCommandDeps } from "../../src/cli-cycle.ts";
+import { REAL_DEVICE_WRITE_NOTICE } from "../../src/write-coverage.ts";
 
 afterEach(() => {
   resetSecretsForTesting();
@@ -42,6 +44,11 @@ describe("run — help and no-command path", () => {
     const code = await run(["--help"]);
     expect(code).toBe(ExitCode.Ok);
     expect(spy).toHaveBeenCalled();
+    const usage = String(spy.mock.calls[0]![0]);
+    const escapedNotice = REAL_DEVICE_WRITE_NOTICE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(usage.match(new RegExp(escapedNotice, "g"))).toHaveLength(3);
+    expect(usage.split("\n").find((line) => line.includes("devices list"))).not.toContain(REAL_DEVICE_WRITE_NOTICE);
+    expect(usage.split("\n").find((line) => line.includes("plug status"))).not.toContain(REAL_DEVICE_WRITE_NOTICE);
     spy.mockRestore();
   });
 
@@ -199,6 +206,7 @@ describe("run — plug command routing (subcommand/argument validation only; the
     };
     const transport = new FakeWyzeTransport();
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
 
     const code = await dispatchPlug(["on", "fake synthetic plug — not a real device"], true, {
       loadCredentials: async () => fakeCreds,
@@ -206,9 +214,35 @@ describe("run — plug command routing (subcommand/argument validation only; the
     });
 
     expect(code).toBe(ExitCode.Ok);
-    const printed = JSON.parse(String(logSpy.mock.calls[0]![0]));
+    expect(logSpy.mock.calls).toHaveLength(1);
+    const stdout = String(logSpy.mock.calls[0]![0]);
+    const printed = JSON.parse(stdout);
     expect(printed.command).toBe("plug on");
+    expect(errSpy).toHaveBeenCalledWith(REAL_DEVICE_WRITE_NOTICE);
+    expect(stdout).not.toContain(REAL_DEVICE_WRITE_NOTICE);
     logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  test("`plug off --json` keeps its single JSON stdout value unchanged and writes the shared notice only to stderr", async () => {
+    const fakeCreds: Credentials = {
+      email: "test-account@example.invalid",
+      password: "fake-test-password-000",
+      keyId: "fake-key-id-000",
+      keySecret: "fake-key-secret-000",
+      totpSecret: undefined,
+    };
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    await dispatchPlug(["off", "fake synthetic plug — not a real device"], true, {
+      loadCredentials: async () => fakeCreds,
+      createTransport: () => new FakeWyzeTransport(),
+    });
+    expect(logSpy.mock.calls).toHaveLength(1);
+    expect(JSON.parse(String(logSpy.mock.calls[0]![0])).command).toBe("plug off");
+    expect(errSpy).toHaveBeenCalledWith(REAL_DEVICE_WRITE_NOTICE);
+    logSpy.mockRestore();
+    errSpy.mockRestore();
   });
 
   test("defaultPlugDispatchDeps.createTransport() constructs a RealWyzeTransport", () => {
@@ -325,6 +359,23 @@ describe("run — cycle command routing (argument validation only; the real wiri
   test("dispatchCycle() throws the same Usage error directly, without needing the full run() boundary", async () => {
     await expect(dispatchCycle([], false)).rejects.toThrow(CliError);
     await expect(dispatchCycle([], false)).rejects.toThrow(/Usage: wyzr cycle <device>/);
+  });
+
+  test("a valid cycle invocation emits the shared notice to stderr without adding anything to --json stdout", async () => {
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      dispatchCycle(["fixture-device"], true, {
+        ...defaultCycleCommandDeps,
+        loadCredentials: async () => {
+          throw new Error("stop after notice fixture");
+        },
+      }),
+    ).rejects.toThrow("stop after notice fixture");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(REAL_DEVICE_WRITE_NOTICE);
+    logSpy.mockRestore();
+    errSpy.mockRestore();
   });
 });
 

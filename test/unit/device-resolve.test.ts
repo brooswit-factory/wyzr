@@ -12,6 +12,7 @@ function device(overrides: Partial<DeviceRecord> = {}): DeviceRecord {
     model: "WLPP1",
     name: "Garage Plug",
     isPlug: true,
+    plugKind: "switchable-plug",
     state: "online",
     note: null,
     ...overrides,

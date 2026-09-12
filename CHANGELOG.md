@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Device listing now recognizes the relayed `WLPP1CFH` plug family, marks
+  `WLPPO` as an OutdoorPlug parent rather than an addressable outlet, and
+  preserves `[?]` for unknown models. Write verbs and their help text now
+  state on stderr that real-device writes have never been exercised through
+  wyzr, without changing `--json` stdout (WYZR-39).
+
 - The post-cycle recovery engine and `wyzr recovery status` (WYZR-18/WYZR-25)
   — a read-only command answering "did that power cycle actually work?" with
   evidence, not assumption. **Ships no plug-switching capability at all, and

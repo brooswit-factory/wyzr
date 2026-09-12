@@ -75,6 +75,7 @@ describe("runDevicesList — end to end against the fake transport, zero credent
           model: "WLPP1",
           name: "fake synthetic plug — not a real device",
           isPlug: true,
+          plugKind: "switchable-plug",
           state: "online",
           note: null,
         },
