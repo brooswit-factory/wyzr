@@ -4,7 +4,7 @@ Use this only from the provisioned **manager box**. Never install or run `wyzr`
 on the fleet box, even as an emergency workaround. Fill placeholders from your
 own protected config; do not copy environment values from this repository.
 
-## 1. Prove this is the manager box and check the gate
+## 1. Prove this is the manager box
 
 Failure condition before running: if `wyzr doctor --json` does not return
 `READY` with exit 0, or its wrong-box guard is anything except `not_target`,
@@ -13,19 +13,31 @@ but unreadable, and 29 means required operational coverage is unconfigured.
 
 ```sh
 wyzr doctor --json
-wyzr wedge status --json
 ```
 
-For the gate, exit 0 is `WEDGED`; 11 is `NOT_PROVEN` and 12 is
-`INCONCLUSIVE_BY_SHARED_CAUSE`. Either nonzero verdict means do not act without
-the deliberate force procedure below. Read every probe and reason. `P5` and
+## 2. Check the gate
+
+Failure condition before running: exit 11 (`NOT_PROVEN`) or 12
+(`INCONCLUSIVE_BY_SHARED_CAUSE`) does not authorize normal action. Review every
+probe and reason; continue only through the bounded force branch below if an
+independent human judgment justifies overriding that verdict. `P5` and
 `conn_state` are plug preconditions, not evidence that the box is wedged or
 later recovered.
 
-## 2. Preview the entire decision
+```sh
+wyzr wedge status --json
+```
 
-Failure condition before running: if the dry run does not report `would_act`
-(exit 20), nothing may be cut. Run:
+Exit 0 is `WEDGED`; 11 is `NOT_PROVEN` and 12 is
+`INCONCLUSIVE_BY_SHARED_CAUSE`. Either nonzero verdict means do not act without
+the deliberate force procedure below.
+
+## 3. Preview the entire decision
+
+Failure condition before running: exit 18 (wrong-box refusal), exit 19
+(precondition refusal), or any config/auth/usage failure forbids both normal and
+forced action. Exit 17 permits no normal action, but may enter only the bounded
+force branch in step 4. Normal action requires `would_act`/exit 20.
 
 ```sh
 wyzr cycle <FLEET-PLUG-FROM-CONFIG> --dry-run --json
@@ -37,22 +49,30 @@ different; 19 means cloud reachability or the plug's P3/P5 state was not
 confident immediately before the proposed cut. Fix the cause and repeat the
 doctor and preview. Force cannot override 18 or 19.
 
-## 3. Act, or deliberately override only the verdict
+## 4. Act normally, or deliberately override only the verdict
 
 Failure condition before acting: if the preview target is not the fleet plug
 named by your protected `fleetPlug` config, if hand restoration is unavailable,
 or if you cannot tolerate the configured interruption and restore bounds, stop.
 
-Normal gated action:
+If and only if the ordinary dry run returned exit 20, normal gated action is:
 
 ```sh
 wyzr cycle <FLEET-PLUG-FROM-CONFIG> --json
 ```
 
-Force is legitimate only when a human has reviewed the complete evidence and
+If the dry run returned exit 17, force is legitimate only when a human has reviewed the complete evidence and
 has independent reason to accept that the gate's verdict is too conservative.
 It overrides only `NOT_PROVEN`/`INCONCLUSIVE_BY_SHARED_CAUSE`; it never overrides
 configuration/login requirements, preconditions, or the wrong-box guard.
+
+Failure condition before running the force command: do not proceed unless the
+only refusal is the gate verdict; stop on exit 18, 19, or any config/auth/usage
+failure. The command prints an **unforced preview before confirmation**. If its
+interactive target does not exactly match the configured target host, do not
+confirm. The automation form
+`--force-non-interactive-confirm-target=<TARGET-HOST-FROM-CONFIG>` is the same
+exact-match confirmation, not a bypass.
 
 ```sh
 wyzr cycle <FLEET-PLUG-FROM-CONFIG> \
@@ -60,25 +80,20 @@ wyzr cycle <FLEET-PLUG-FROM-CONFIG> \
   --json
 ```
 
-Failure condition: if the interactive target does not exactly match the
-configured target host, do not confirm. For automation, the equivalent
-`--force-non-interactive-confirm-target=<TARGET-HOST-FROM-CONFIG>` remains an
-exact-match confirmation, not a bypass.
-
-## 4. Interpret the result and recover a stranded plug
+## 5. Interpret the result and recover a stranded plug
 
 - Exit 0, `recovered`: automated restore completed and the composed recovery
   verdict passed.
-- Exit 21, `stranded`: OFF was attempted and ON was not confirmed. Immediately
-  copy the exact `handRestoreCommand` shown in this result (configured at
-  `cycle.handRestoreCommand`) and run it by hand:
+- Exit 21, `stranded`: OFF was attempted and ON was not confirmed. Before doing
+  anything else, know the failure condition: if the configured hand command
+  does not independently confirm power restored, escalate to physical/app
+  control and do not rerun the cycle. Now copy the exact `handRestoreCommand`
+  shown in this result (configured at `cycle.handRestoreCommand`) and run it:
 
   ```sh
   <HAND-RESTORE-COMMAND-FROM-CONFIG>
   ```
 
-  Failure condition: if that command does not independently confirm power is
-  restored, escalate to physical/app control; do not rerun the cycle.
 - Exit 22, `not_recovered`: the plug confirmed ON, but the box affirmatively did
   not recover. Plug liveness is not a substitute for recovery.
 - Exit 23, `fleet_half_restored`: the box rebooted, but fleet processes lack the
@@ -103,7 +118,7 @@ chosen time. Every refusal means nothing was cut; code 20 is also non-writing by
 construction. Codes 21 and 33 are different: their write was attempted and
 restore was not confirmed.
 
-## 5. Verify the box, independently
+## 6. Verify the box, independently
 
 Failure condition before checking: ssh still failing, or `who -b` reporting the
 old boot time, means recovery is **not** confirmed. Once ssh responds, run on
@@ -118,13 +133,19 @@ the recorded power-cut time. This recovery method was measured; `P5`,
 `conn_state`, and all other plug-liveness readings say nothing about broader box
 recovery.
 
-## 6. Record without transmitting identifiers
+## 7. Record without transmitting identifiers
 
-Use [capture-format.md](capture-format.md), writing the expected result before
-the command and capturing the exit directly (`cmd > log 2>&1; echo "exit=$?"`).
-Before pasting, replace the command's target with a placeholder and run the
-result through the repository's paste-back redaction code. Then re-read the
-paste specifically for secrets, device macs, plug names, fleet hostnames,
-addresses, ports, usernames, and systemd units. Failure condition: if any such
-value remains, do not paste it. Record times, exit code, redacted full output,
-whether ssh returned, whether `who -b` advanced, and any hand restoration.
+Failure condition before capturing: if the expected result has not been written
+down first, stop; a post-hoc expectation is not evidence. Use
+[capture-format.md](capture-format.md), then run the command and capture its exit
+directly (`cmd > log 2>&1; echo "exit=$?"`).
+
+Failure condition before redacting: if you cannot use the repository's
+paste-back code, stop and follow the capture format's explicit hand-redaction
+fallback. Replace the command target with a placeholder and redact the result.
+
+Failure condition before pasting: if secrets, device macs, plug names, fleet
+hostnames, addresses, ports, usernames, or systemd units remain after a specific
+re-read for each category, do not transmit it. Only then paste the times, exit
+code, redacted full output, whether ssh returned, whether `who -b` advanced, and
+any hand restoration.
