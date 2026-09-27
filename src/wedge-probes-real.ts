@@ -214,7 +214,7 @@ export class RealWedgeProbes implements WedgeProbes {
   }
 
   async checkJiraActivity(config: JiraInstrumentConfig): Promise<RawInstrumentReading> {
-    const jql = config.projectKey ? `project = "${config.projectKey}" ORDER BY updated DESC` : "ORDER BY updated DESC";
+    const jql = config.projectKey ? `project = "${config.projectKey}" ORDER BY updated DESC` : "updated >= -30d ORDER BY updated DESC"; // /search/jql rejects unbounded JQL (HTTP 400)
     const url = `${config.baseUrl}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=1&fields=updated`;
 
     let response: Response;
