@@ -25,7 +25,7 @@
 //   `tailscale` binary already present there. Field NAME only — no host,
 //   IP, or other sandbox-identifying value from that output is reproduced
 //   anywhere in this repo, per the ticket's "never a fleet hostname" rule.
-// - Jira's `/rest/api/3/search` response shape (`issues[0].fields.updated`
+// - Jira's `/rest/api/3/search/jql` response shape (the old `/rest/api/3/search` now returns HTTP 410) (`issues[0].fields.updated`
 //   as an ISO 8601 string): tier (b) — read from Atlassian's own public
 //   REST API documentation. NEVER captured live in this project: doing so
 //   would require a real credentialed call against a real Jira instance,
@@ -215,7 +215,7 @@ export class RealWedgeProbes implements WedgeProbes {
 
   async checkJiraActivity(config: JiraInstrumentConfig): Promise<RawInstrumentReading> {
     const jql = config.projectKey ? `project = "${config.projectKey}" ORDER BY updated DESC` : "ORDER BY updated DESC";
-    const url = `${config.baseUrl}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=1&fields=updated`;
+    const url = `${config.baseUrl}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=1&fields=updated`;
 
     let response: Response;
     try {

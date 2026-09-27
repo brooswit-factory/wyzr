@@ -1273,7 +1273,7 @@ points at** — see "Configuration" below.
 
 - **Jira-activity** (`src/wedge-probes-real.ts`'s `checkJiraActivity()`) —
   the most recent issue update visible to the configured credential
-  (`GET /rest/api/3/search?jql=ORDER BY updated DESC`), and how long ago
+  (`GET /rest/api/3/search/jql?jql=ORDER BY updated DESC`), and how long ago
   it was.
 - **GitHub-activity** (`checkGitHubActivity()`) — the most recent public
   event on the configured org/repo
@@ -1663,7 +1663,7 @@ exercise the orchestration and CLI-wiring layers against `FakeWedgeProbes`.
 
 **Jira-activity has never been exercised against a real Jira instance.**
 `checkJiraActivity()`'s request/response shape
-(`/rest/api/3/search?jql=...`, reading `issues[0].fields.updated`) is tier
+(`/rest/api/3/search/jql?jql=...`, reading `issues[0].fields.updated`) is tier
 (b) — read from Atlassian's own public REST API documentation — never
 captured live in this project, because doing so would require a real
 credentialed call against a real Jira instance, which this task has no

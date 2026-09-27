@@ -194,6 +194,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- `wyzr wedge status` Jira activity check: switched from the removed
+  `/rest/api/3/search` endpoint (Atlassian now answers HTTP 410) to
+  `/rest/api/3/search/jql`, the same `issues[0].fields.updated` shape. The old
+  endpoint made the Jira instrument report an error, so the wedge check could
+  never reach the two silent instruments it needs and `wyzr cycle` was refused
+  as NOT_PROVEN (FACTORY-34 / FACTORY-342). Not exercised against a live Jira
+  from this change; the response shape is unchanged in Atlassian's docs.
+
 - **wyzr could not log in at all, even with correct credentials** (WYZR-15).
   Root cause: this project believed the Wyze auth host and device host
   shared one `{code,msg,data}` response envelope; they do not, and the
